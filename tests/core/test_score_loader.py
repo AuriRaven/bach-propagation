@@ -180,6 +180,46 @@ class TestErrorHandling:
 
 
 # ===========================================================================
+# Corpus loading
+# ===========================================================================
+
+def _corpus_available() -> bool:
+    try:
+        from music21 import corpus
+        corpus.parse('bwv846')
+        return True
+    except Exception:
+        return False
+
+
+_CORPUS_PRESENT = _corpus_available()
+
+
+@pytest.mark.skipif(not _CORPUS_PRESENT, reason="music21 corpus not available")
+class TestCorpusLoading:
+
+    def test_load_corpus_bwv846_returns_score(self):
+        score = ScoreLoader(separate_voices=False).load_corpus('846')
+        assert isinstance(score, Score)
+        assert len(score.events) > 0
+
+    def test_load_corpus_bwv846_key_is_c_major(self):
+        from src.harmonic.key_estimator import KeyEstimator
+        score = ScoreLoader(separate_voices=False).load_corpus('846')
+        key = KeyEstimator().estimate_global(score)
+        assert key.tonic == 0
+        assert key.mode == 'major'
+
+    def test_load_from_m21_same_event_count_as_load_corpus(self):
+        from music21 import corpus
+        m21_score = corpus.parse('bwv846')
+        loader = ScoreLoader(separate_voices=False)
+        score_a = loader.load_corpus('846')
+        score_b = loader.load_from_m21(m21_score)
+        assert len(score_a.events) == len(score_b.events)
+
+
+# ===========================================================================
 # Convenience wrapper
 # ===========================================================================
 

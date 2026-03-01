@@ -356,6 +356,58 @@ class TestRomanNumeralLabel:
                           local_key_tonic=0, local_key_mode='minor')
         assert rn.label == 'V'
 
+    # Seventh chords – quality marks (fixed from known gap)
+    def test_dim7_root_position(self):
+        assert self._rn(7, 'dim7', 0).label == 'viio7'
+
+    def test_half_dim7_root_position(self):
+        assert self._rn(7, 'half-dim7', 0).label == 'viiø7'
+
+    def test_major7_root_position(self):
+        assert self._rn(1, 'major7', 0).label == 'IM7'
+
+    def test_minor7_root_position(self):
+        assert self._rn(2, 'minor7', 0).label == 'ii7'
+
+    def test_dim7_first_inversion(self):
+        assert self._rn(7, 'dim7', 1).label == 'viio65'
+
+    def test_half_dim7_second_inversion(self):
+        assert self._rn(7, 'half-dim7', 2).label == 'viiø43'
+
+
+# ===========================================================================
+# HarmonicEvent
+# ===========================================================================
+
+class TestHarmonicEvent:
+
+    def _make_chord(self, onset=0, dur=4):
+        from src.core.data_structures import Chord
+        return Chord(
+            onset=Fraction(onset), duration=Fraction(dur),
+            root=0, quality='major',
+            pitches=frozenset({0, 4, 7}), bass=0, inversion=0,
+        )
+
+    def _make_rn(self):
+        return RomanNumeral(
+            degree=1, quality='major', inversion=0,
+            local_key_tonic=0, local_key_mode='major',
+        )
+
+    def test_onset_delegates_to_chord(self):
+        from src.core.data_structures import HarmonicEvent
+        chord = self._make_chord(onset=8)
+        he = HarmonicEvent(chord=chord, roman_numeral=self._make_rn())
+        assert he.onset == Fraction(8)
+
+    def test_duration_delegates_to_chord(self):
+        from src.core.data_structures import HarmonicEvent
+        chord = self._make_chord(dur=3)
+        he = HarmonicEvent(chord=chord, roman_numeral=self._make_rn())
+        assert he.duration == Fraction(3)
+
 
 # ===========================================================================
 # KeyEstimate

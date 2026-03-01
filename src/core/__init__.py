@@ -3,6 +3,7 @@
 from .data_structures import (
     Accidental,
     Chord,
+    HarmonicEvent,
     HarmonicFunction,
     HarmonicSegment,
     KeyEstimate,
@@ -17,6 +18,7 @@ from .score_loader import ScoreLoader, ScoreLoadError, load_score
 __all__ = [
     "Accidental",
     "Chord",
+    "HarmonicEvent",
     "HarmonicFunction",
     "HarmonicSegment",
     "KeyEstimate",

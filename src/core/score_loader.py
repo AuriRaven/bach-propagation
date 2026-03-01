@@ -120,10 +120,56 @@ class ScoreLoader:
             )
             
             return score
-            
+
         except Exception as e:
             raise ScoreLoadError(f"Failed to load {filepath}: {str(e)}") from e
-    
+
+    def load_from_m21(self, m21_score, filepath: str = "<corpus>") -> Score:
+        """
+        Convert an already-parsed music21 Score into our Score type.
+
+        Useful when the caller has loaded a music21 score via corpus.parse()
+        or any other means and wants to run it through our pipeline.
+
+        Args:
+            m21_score: A music21 Score (or stream) object.
+            filepath:  Optional label for logging — not used for file access.
+
+        Returns:
+            Score object with all musical events and metadata.
+        """
+        events = self._extract_events(m21_score)
+        time_signatures = self._extract_time_signatures(m21_score)
+        metadata = self._extract_metadata(m21_score, Path(filepath))
+        return Score(
+            events=events,
+            time_signatures=time_signatures,
+            title=metadata.get('title'),
+            composer=metadata.get('composer'),
+            tempo=metadata.get('tempo'),
+            metadata=metadata,
+        )
+
+    def load_corpus(self, bwv: str) -> Score:
+        """
+        Load a score from music21's built-in corpus by BWV number.
+
+        Args:
+            bwv: BWV number as a string, e.g. '846', '66.6', '1007'.
+
+        Returns:
+            Score object ready for the analysis pipeline.
+
+        Raises:
+            ScoreLoadError: If the corpus entry cannot be found or parsed.
+        """
+        try:
+            from music21 import corpus
+            m21_score = corpus.parse(f'bwv{bwv}')
+            return self.load_from_m21(m21_score, filepath=f"<corpus:bwv{bwv}>")
+        except Exception as e:
+            raise ScoreLoadError(f"Failed to load corpus bwv{bwv}: {e}") from e
+
     def _extract_events(self, m21_score: M21Score) -> List[MusicalEvent]:
         """
         Extract all musical events from a music21 score.
@@ -480,9 +526,9 @@ class ScoreLoader:
         if 'title' not in metadata:
             metadata['title'] = filepath.stem
         
-        # Extract tempo
+        # Extract tempo (MetronomeMark.number may be None for text-only marks)
         tempo_marks = m21_score.flatten().getElementsByClass(tempo.MetronomeMark)
-        if tempo_marks:
+        if tempo_marks and tempo_marks[0].number is not None:
             metadata['tempo'] = int(tempo_marks[0].number)
         
         # Count parts and measures

@@ -184,6 +184,28 @@ class Chord:
         return self.onset + self.duration
 
 
+@dataclass
+class HarmonicEvent:
+    """
+    Bundles a Chord with its RomanNumeral for prolongation analysis.
+
+    Provides a unified onset/duration interface so prolongation rules can treat
+    a (chord, roman_numeral) pair as a single addressable event.
+    """
+    chord: 'Chord'
+    roman_numeral: 'RomanNumeral'
+
+    @property
+    def onset(self) -> Fraction:
+        """Start time of the underlying chord."""
+        return self.chord.onset
+
+    @property
+    def duration(self) -> Fraction:
+        """Duration of the underlying chord."""
+        return self.chord.duration
+
+
 _DEGREE_LABELS_MAJOR = {1: 'I', 2: 'ii', 3: 'iii', 4: 'IV', 5: 'V', 6: 'vi', 7: 'viio'}
 _DEGREE_LABELS_MINOR = {1: 'i', 2: 'iio', 3: 'III', 4: 'iv', 5: 'V', 6: 'VI', 7: 'viio'}
 _QUALITY_SUFFIXES = {
@@ -196,6 +218,13 @@ _INVERSION_FIGURES = {
 }
 _INVERSION_FIGURES_7TH = {
     0: '7', 1: '65', 2: '43', 3: '42',
+}
+_SEVENTH_QUALITY_MARKS = {
+    'dominant7': '',   # V7   — '7' already in figure
+    'dim7':      'o',  # viio7
+    'half-dim7': 'ø',  # viiø7
+    'major7':    'M',  # IM7
+    'minor7':    '',   # ii7
 }
 _PITCH_CLASS_NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
 
@@ -240,9 +269,9 @@ class RomanNumeral:
 
         is_seventh = '7' in self.quality
         if is_seventh:
-            # Seventh-chord figures already encode the inversion (7, 65, 43, 42)
+            mark = _SEVENTH_QUALITY_MARKS.get(self.quality, '')
             figures = _INVERSION_FIGURES_7TH.get(self.inversion, str(self.inversion))
-            result = base + figures
+            result = base + mark + figures
         else:
             suffix = _QUALITY_SUFFIXES.get(self.quality, '')
             figures = _INVERSION_FIGURES.get(self.inversion, str(self.inversion))

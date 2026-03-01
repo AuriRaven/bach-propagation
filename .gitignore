@@ -31,3 +31,11 @@ outputs/
 # ---- Editor ----
 .vscode/
 .idea/
+
+# ---- pytest ----
+.pytest_cache/
+
+# ---- Model artefacts ----
+*.pt
+*.ckpt
+data/sequences.json

@@ -1,4 +1,4 @@
-# bach-propagation
+# **Bach Propagation**
 
 Pipeline de investigación para analizar y modelar el lenguaje armónico de Bach. El sistema toma archivos MIDI o MusicXML en bruto, extrae secuencias armónicas a través de un pipeline de análisis de múltiples etapas, entrena un LSTM como modelo base sobre esas secuencias y realiza un análisis no supervisado del espacio de embeddings de acordes aprendido.
 

@@ -1,6 +1,6 @@
 # **Bach Propagation**
 
-Pipeline de investigación para analizar y modelar el lenguaje armónico de Bach. El sistema toma archivos MIDI o MusicXML en bruto, extrae secuencias armónicas a través de un pipeline de análisis de múltiples etapas, entrena un LSTM como modelo base sobre esas secuencias y realiza un análisis no supervisado del espacio de embeddings de acordes aprendido.
+>Este proyecto corresponde a un Pipeline de investigación para analizar y modelar el lenguaje armónico de Bach. El sistema toma archivos MIDI o MusicXML en bruto, extrae secuencias armónicas a través de un pipeline de análisis de múltiples etapas, entrena un LSTM como modelo base sobre esas secuencias y realiza un análisis no supervisado del espacio de embeddings de acordes aprendido.
 
 ---
 
@@ -13,7 +13,7 @@ MIDI / MusicXML
   ScoreLoader          ← parseo a representación interna Score
       │
       ▼
-  Quantizer            ← ajuste de onsets/duraciones a grilla rítmica
+  Quantizer            ← ajuste de onsets/duraciones a rejilla rítmica
       │
       ▼
   Windower             ← segmentación en ventanas de análisis
@@ -54,7 +54,7 @@ bach-propagation/
 │   │   ├── data_structures.py       # Todos los tipos del dominio musical (tiempo con Fraction)
 │   │   └── score_loader.py          # MIDI/MusicXML → Score
 │   ├── temporal/
-│   │   ├── meter_analyzer.py        # Grillas de peso métrico jerárquico
+│   │   ├── meter_analyzer.py        # Rejillas de peso métrico jerárquico
 │   │   ├── quantizer.py             # Ajuste de onsets y duraciones
 │   │   └── windower.py              # Segmentación (compás / tiempo / deslizante)
 │   ├── harmonic/
@@ -70,7 +70,7 @@ bach-propagation/
 │   │   └── dataset.py               # HarmonyDataset, partición 80/20 train-val
 │   ├── models/
 │   │   ├── baseline_lstm.py         # BaroqueHarmonyLSTM (embed=64, hidden=128, 2 capas)
-│   │   └── train.py                 # Bucle de entrenamiento con early stopping
+│   │   └── train.py                 # Loop de entrenamiento con early stopping
 │   ├── evaluation/
 │   │   └── metrics.py               # Exactitud, perplejidad, validez de transiciones, ARI
 │   ├── analysis/
@@ -80,19 +80,22 @@ bach-propagation/
 ├── scripts/
 │   ├── extract_all.py               # Extracción en lote del corpus → sequences.json
 │   ├── train_baseline.py            # Entrenamiento del LSTM → model_best.pt
-│   ├── evaluate_baseline.py         # Tabla de métricas: LSTM vs. línea base aleatoria
+│   ├── evaluate_baseline.py         # Tabla de métricas: LSTM vs. Modelo aleatorio
 │   ├── analyze_embeddings.py        # Clustering de embeddings + figuras
 │   └── validate_chorales.py         # Validación del pipeline en 10 corales BWV
 ├── tests/                           # Suite pytest (un subpaquete por módulo de src)
 ├── data/
 │   └── samples/01_bach/             # Archivos MIDI locales (opcionales — ver más abajo)
 ├── results/                         # Salidas de los scripts (en .gitignore)
-├── CONTEXT.md                       # Referencia técnica completa para sesiones con LLM
+├── README.md                        # Documentación técnica e instrucciones para usar el repositorio
 ├── pyproject.toml
 └── uv.lock
 ```
 
 ---
+
+## Datos
+Puedes usar el el corpus de bach para Cello, Violín y Flauta Solos disponible dando click [aquí](https://drive.google.com/drive/folders/1xVFWoCIXrHlDUlijDBDBJGywb6344sfT?usp=sharing). Acomódalo dentro de una ubicación llamada `data/samples`a nivel raíz. 
 
 ## Instalación
 
@@ -152,7 +155,7 @@ uv run python scripts/extract_all.py \
 
 Produce `data/sequences.json` — una lista de secuencias de dicts de eventos usada para el entrenamiento.
 
-### 2 — Entrenar el LSTM de línea base
+### 2 — Entrenar el LSTM como modelo baseline
 
 ```bash
 uv run python scripts/train_baseline.py \
@@ -171,7 +174,7 @@ uv run python scripts/evaluate_baseline.py \
     --sequences data/sequences.json
 ```
 
-Imprime una tabla comparativa (LSTM vs. línea base aleatoria) con exactitud de acorde, exactitud de función, validez de transiciones y perplejidad.
+Imprime una tabla comparativa (LSTM vs. Modelo Aleatorio) con exactitud de acorde, exactitud de función armónica, validez de transiciones y perplejidad.
 
 ### 4 — Analizar el espacio de embeddings de acordes
 
@@ -190,7 +193,7 @@ Salidas:
 | `embeddings_2d.csv` | Coordenadas 2D (PCA) para los 60 tokens de acorde |
 | `figures/function_ground_truth.png` | Scatter coloreado por función armónica |
 | `figures/clusters_k3/5/7.png` | Scatter coloreado por cluster k-means |
-| `figures/combined_analysis.png` | Figura 2×2 para la tesis (funciones + clusters k=3/5 + barras de pureza) |
+| `figures/combined_analysis.png` | Figura 2×2 para la reporte completo (funciones + clusters k=3/5 + barras de pureza) |
 
 ### 5 — Validar el pipeline en corales BWV
 
@@ -224,7 +227,7 @@ Las calidades no canónicas se colapsan antes de codificar: `major7 → major`, 
 ## Decisiones de diseño clave
 
 - **`fractions.Fraction` para todos los valores temporales** — sin errores de redondeo flotante en aritmética de onsets y duraciones.
-- **`separate_voices=False` para MIDI solista** — MuseScore exporta incluso piezas monofónicas como 3–4 tracks MIDI; aplanar a voz 0 evita voces fantasma.
+- **`separate_voices=False` para MIDI solista** — MuseScore exporta incluso piezas monofónicas como 3–4 tracks MIDI; se aplana la voz 0 (instrumento solo) para evitar voces fantasma. Esto debido a que piezas musicales (en formato MIDI o XML) a una sola voz pueden estar estructuradas a varias voces 
 - **Puntuación de acordes con media geométrica** — `raw / sqrt(total × n_notas)` equilibra cobertura y completitud; los acordes de séptima ganan solo cuando las 4 notas están presentes.
 - **Detección de dominantes secundarias** — un acorde se marca como V/x únicamente si `(raíz + 5) % 12` coincide con una tónica diatónica y la calidad del acorde difiere de la calidad diatónica esperada para ese grado.
 - **Etiquetas de función por voto mayoritario** — `build_chord_function_map` del encoder asigna a cada token de acorde su función armónica más frecuente en el corpus de entrenamiento; usada como verdad de referencia en la evaluación no supervisada.

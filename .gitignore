@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *.so
 
+# ---- Environment variables ----
+.env
+
 # ---- Virtual environments ----
 .venv/
 venv/

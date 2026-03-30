@@ -120,7 +120,7 @@ class TestExtractSequenceUnit:
             patch('src.data.sequence_extractor.FunctionLabeler') as mock_fl_cls,
         ):
             mock_loader = MagicMock()
-            mock_loader.load_file.return_value = score
+            mock_loader.load.return_value = score
             mock_loader_cls.return_value = mock_loader
 
             mock_ke = MagicMock()

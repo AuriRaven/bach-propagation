@@ -1,0 +1,25 @@
+# Identidad y Configuración Sensible
+.env
+.env.*
+*.pem
+*.key
+.claudecode/
+.anthropic/
+
+# Dependencias y Binarios
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+
+# Datos de Usuario y Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archivos de Sistema y Git
+.git/
+.DS_Store

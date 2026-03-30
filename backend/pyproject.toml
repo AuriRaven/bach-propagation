@@ -1,0 +1,26 @@
+[project]
+name = "bach-propagation"
+version = "0.1.0"
+description = "Musical analysis and generative synthesis based on J.S. Bach"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "music21>=9.1",
+    "numpy>=2.4.2",
+    "torch>=2.10.0",
+    "matplotlib>=3.9",
+    "scikit-learn>=1.5",
+    "scipy>=1.14",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

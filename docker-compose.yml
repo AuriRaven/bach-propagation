@@ -1,0 +1,26 @@
+services:
+  backend:
+    build: 
+      context: ./backend
+    container_name: bach-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - /app/.venv # Esto protege la carpeta creada en el build
+    environment:
+      - ENV=development
+      # Forzamos a uv a usar el path correcto
+      - PATH=/app/.venv/bin:$PATH
+
+  frontend:
+    build: ./frontend
+    container_name: bach-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000

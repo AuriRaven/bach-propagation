@@ -1,44 +1,116 @@
-# ---- Python ----
+# ==========================================
+# 🎵 Motif AI - Bach Propagation .gitignore
+# ==========================================
+
+# --- Python & Cache ---
 __pycache__/
 *.py[cod]
+*$py.class
 *.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# ---- Environment variables ----
-.env
-
-# ---- Virtual environments ----
+# --- Entornos Virtuales (Crucial para tu M4 Pro) ---
 .venv/
 venv/
 env/
+ENV/
+bin/
+include/
+share/
 
-# ---- uv ----
+# --- Paquetes y Gestores (uv / poetry) ---
 .uv/
+.python-version
+# Nota: uv.lock SI se debe versionar, pero .uv no.
 
-# ---- Data (no versionar datasets crudos) ----
-data/raw/
-data/processed/
-data/samples/
+# --- Variables Sensibles ---
+.env
+.env.*
+!.env.example
 
-# ---- Jupyter ----
-.ipynb_checkpoints/
+# --- Datos Musicales y Resultados (Evita los 350 cambios) ---
+# Ignoramos carpetas de datos pesados específicamente
+backend/data/
+backend/results/
+backend/outputs/
+backend/logs/
+backend/notebooks/
 
-# ---- Logs & outputs ----
-logs/
-runs/
-outputs/
-*.log
+# Ignoramos archivos binarios y de salida en cualquier nivel
+*.mid
+*.midi
+*.xml
+*.mxl
+*.json
 
-# ---- OS ----
-.DS_Store
+# --- EXCEPCIONES CRÍTICAS (No ignorar código) ---
+# No ignores la carpeta de lógica aunque se llame data
+!backend/src/data/
+# No ignores los archivos Python dentro de esa carpeta
+!backend/src/data/*.py
 
-# ---- Editor ----
-.vscode/
-.idea/
+# Excepción para archivos de configuración JSON
+!**/package.json
+!**/tsconfig.json
+!**/pyproject.toml
 
-# ---- pytest ----
-.pytest_cache/
-
-# ---- Model artefacts ----
+# --- Artefactos de IA / Modelos ---
 *.pt
+*.pth
 *.ckpt
-data/sequences.json
+*.h5
+*.onnx
+model_best.pt
+
+# --- Testing & Cobertura ---
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+htmlcov/
+
+# --- Frontend (Next.js) ---
+**/node_modules/
+.next/
+out/
+build/
+.vercel
+*.tsbuildinfo
+
+# --- Docker ---
+.docker/
+
+# --- Sistema y Editores ---
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.bak
+
+# --- Claude Code / Logs de Agentes ---
+.claude/

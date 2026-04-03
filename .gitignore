@@ -52,7 +52,10 @@ backend/data/
 backend/results/
 backend/outputs/
 backend/logs/
-backend/notebooks/
+
+# Permitir la carpeta de notebooks para experimentos
+!backend/notebooks/
+!backend/notebooks/*.ipynb
 
 # Ignoramos archivos binarios y de salida en cualquier nivel
 *.mid

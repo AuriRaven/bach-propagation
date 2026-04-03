@@ -53,9 +53,13 @@ backend/results/
 backend/outputs/
 backend/logs/
 
-# Permitir la carpeta de notebooks para experimentos
+# --- EXCEPCIONES PARA NOTEBOOKS ---
 !backend/notebooks/
 !backend/notebooks/*.ipynb
+
+# --- BASURA DE JUPYTER (Ignorar siempre) ---
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
 
 # Ignoramos archivos binarios y de salida en cualquier nivel
 *.mid

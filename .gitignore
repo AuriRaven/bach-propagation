@@ -14,7 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+backend/lib/
+**/site-packages/
 lib64/
 parts/
 sdist/
@@ -70,6 +71,10 @@ backend/notebooks/
 !**/package.json
 !**/tsconfig.json
 !**/pyproject.toml
+
+# Permitir la carpeta lib del frontend
+!frontend/lib/
+!frontend/lib/*.ts
 
 # --- Artefactos de IA / Modelos ---
 *.pt

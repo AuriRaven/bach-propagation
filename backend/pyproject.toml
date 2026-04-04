@@ -13,6 +13,10 @@ dependencies = [
     "matplotlib>=3.9",
     "scikit-learn>=1.5",
     "scipy>=1.14",
+    # ETL pipeline
+    "aiohttp>=3.9",
+    "tenacity>=8.2",
+    "beautifulsoup4>=4.12",
 ]
 
 [project.optional-dependencies]

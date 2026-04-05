@@ -59,8 +59,14 @@ logger = logging.getLogger(__name__)
 
 #: All composers available on kunstderfuge.com that we want to download.
 #: Key = URL slug (``/{slug}.htm``), value = display name.
+#:
+#: NOTE: "bach" is intentionally excluded here.
+#: Live probing (2026-04-04) confirmed that kunstderfuge.com serves 0 parseable
+#: MIDI links on bach.htm and midi.htm.  The site requires a paid subscription
+#: to access MIDI files; the links are either dynamically injected or gated
+#: behind an ASP login endpoint (``/-/subscription.htm``).
+#: Bach MIDI is covered by jsbach.net (363+ files) and KernScores instead.
 ALL_COMPOSERS: dict[str, str] = {
-    "bach":      "J.S. Bach",
     "vivaldi":   "Antonio Vivaldi",
     "handel":    "George Frideric Handel",
     "telemann":  "Georg Philipp Telemann",
@@ -71,8 +77,9 @@ ALL_COMPOSERS: dict[str, str] = {
     "rameau":    "Jean-Philippe Rameau",
 }
 
-#: Convenience subset used when running this file directly.
-BACH_ONLY: dict[str, str] = {"bach": ALL_COMPOSERS["bach"]}
+#: Convenience subset retained for compatibility — now maps to an empty dict
+#: since bach.htm yields 0 MIDI links (subscription paywall).
+BACH_ONLY: dict[str, str] = {}
 
 BASE_URL = "https://www.kunstderfuge.com"
 
@@ -224,7 +231,17 @@ class KunstDerFugeExtractor(BaseExtractor):
         print(f"  Found {len(midi_links)} MIDI link(s)")
 
         if not midi_links:
-            logger.warning("No MIDI links found on %s.htm", slug)
+            if slug == "bach":
+                logger.warning(
+                    "0 MIDI links on bach.htm — kunstderfuge.com requires a paid "
+                    "subscription to access Bach MIDI files. Use jsbach.net instead."
+                )
+                print(
+                    "  ⚠  0 links (paywall detected). "
+                    "Bach MIDI is sourced from jsbach.net — skipping."
+                )
+            else:
+                logger.warning("No MIDI links found on %s.htm", slug)
             return
 
         # Dispatch all downloads concurrently; semaphore limits actual I/O.

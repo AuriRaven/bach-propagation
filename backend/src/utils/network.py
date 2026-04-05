@@ -296,13 +296,52 @@ class BaseExtractor(ABC):
     async def _fetch_text(
         self, session: aiohttp.ClientSession, url: str
     ) -> str:
-        """Fetch *url* and return decoded text. Retries up to 5× with backoff."""
+        """Fetch *url* and return decoded text. Retries up to 5× with backoff.
+
+        Encoding resolution order:
+        1. Charset declared in the Content-Type response header.
+        2. UTF-8 (strict).
+        3. windows-1252 (a superset of ISO-8859-1 / Latin-1 — covers most
+           legacy European music-archive sites).
+        4. UTF-8 with ``errors='replace'`` as a last resort so we never crash.
+        """
         async with self._semaphore:
             async with session.get(
                 url, timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
                 resp.raise_for_status()
-                return await resp.text()
+                raw: bytes = await resp.read()
+
+                # 1. Honour the server's declared charset when present.
+                content_type = resp.headers.get("Content-Type", "")
+                declared_enc: str | None = None
+                for part in content_type.split(";"):
+                    part = part.strip()
+                    if part.lower().startswith("charset="):
+                        declared_enc = part.split("=", 1)[1].strip().strip('"')
+                        break
+
+                if declared_enc:
+                    try:
+                        return raw.decode(declared_enc)
+                    except (UnicodeDecodeError, LookupError):
+                        logger.debug(
+                            "Declared encoding %r failed for %s; trying fallbacks",
+                            declared_enc, url,
+                        )
+
+                # 2–3. Try common encodings in order.
+                for enc in ("utf-8", "windows-1252"):
+                    try:
+                        return raw.decode(enc)
+                    except UnicodeDecodeError:
+                        continue
+
+                # 4. Give up cleanly — replace undecodable bytes rather than crash.
+                logger.warning(
+                    "All encodings failed for %s — decoding with replacement chars", url
+                )
+                return raw.decode("utf-8", errors="replace")
 
     async def download_file(
         self,

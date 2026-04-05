@@ -7,13 +7,34 @@ the three-connection semaphore and jitter-delay constraints imposed by
 
 Extraction sequence
 -------------------
-1. KernScores  — J.S. Bach Humdrum corpus via CLI (``humcat`` / ``humsplit``)
-2. Mutopia     — MusicXML-first scores via async HTTP (prioritises ``.xml``)
-3. KunstDerFuge — MIDI-only corpus via async HTTP (Bach + all Baroque)
+1. JSBachNet   — Solo cello (+ keyboard/violin) MIDI from jsbach.net.
+                 Ground-truth recordings for the Cello Solo Transformer.
+                 Runs first so these files are available even if later steps fail.
+2. BulkXML     — Bulk MusicXML archives via ``git clone --depth 1``:
+                 Bach-370-chorales (Craig Sapp), OpenScore Bach Chorales.
+                 No per-file crawl delay — single archive fetch.
+3. KernScores  — J.S. Bach Humdrum corpus via CLI (``humcat`` / ``humsplit``)
+4. Mutopia     — MusicXML-first scores via async HTTP (prioritises ``.xml``)
+5. KunstDerFuge — MIDI-only corpus via async HTTP (Bach + all Baroque)
 
 Each extractor writes its own ``failed_downloads.json`` to its staging subtree.
-After all three complete, ``check_bronze_integrity`` scans ``data/raw/`` and
+After all five complete, ``check_bronze_integrity`` scans ``data/raw/`` and
 emits ``data/raw/bronze_stats.json``.
+
+Composer attribution in reports
+--------------------------------
+``JSBachNetExtractor`` saves to ``data/raw/bach_js/`` and
+``BulkXMLExtractor`` saves to ``data/raw/bulk_xml/``.
+Both are remapped to ``bach`` in ``check_bronze_integrity`` via
+``COMPOSER_ALIASES`` so the integrity report and ``bronze_stats.json`` show
+the correct Bach file count.
+
+Idempotency
+-----------
+All extractors skip files already present on disk (``is_downloaded`` guard in
+``BaseExtractor.download_file``; directory-existence check in
+``BulkXMLExtractor``).  Re-running the script will not re-download any of the
+1,356 files already in ``data/raw/``.
 
 Polite Researcher policy (enforced by BaseExtractor)
 -----------------------------------------------------
@@ -61,8 +82,10 @@ for _p in (_BACKEND_SRC, _SCRIPT_DIR, _ETL_DIR):
 # ---------------------------------------------------------------------------
 # Extractor imports  (new class names post-refactor)
 # ---------------------------------------------------------------------------
-from download_kernscores_bach import KernScoresBachExtractor   # subprocess-based
-from download_kunstderfuge_p1 import KunstDerFugeExtractor     # async HTTP, MIDI
+from download_jsbach_net       import JSBachNetExtractor        # async HTTP, MIDI — cello priority
+from download_bulk_xml         import BulkXMLExtractor          # git clone / ZIP — no crawl delay
+from download_kernscores_bach  import KernScoresBachExtractor   # subprocess-based
+from download_kunstderfuge_p1  import KunstDerFugeExtractor     # async HTTP, MIDI
 from download_mutopia_baroque  import MutopiaExtractor          # async HTTP, XML+MIDI
 
 # ---------------------------------------------------------------------------
@@ -111,30 +134,54 @@ async def main() -> None:
     run_start = datetime.now(timezone.utc)
 
     print("\n" + "═" * 70)
-    print("  BAROQUE CORPUS ETL  —  Phase 1 : Extract")
+    print("  BAROQUE CORPUS ETL  —  Phase 1 : Extract  (5 sources)")
     print("═" * 70)
     print(f"  Staging root : {STAGING_ROOT.resolve()}")
     print(f"  Started      : {run_start.strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print("═" * 70)
 
-    # ── [1/3] KernScores ──────────────────────────────────────────────────
-    _section("KernScores — J.S. Bach Humdrum corpus (CLI)", "[1/3]")
+    # ── [1/5] JSBachNet ───────────────────────────────────────────────────
+    _section("jsbach.net — Solo Cello, Keyboard & Violin MIDI (ground truth)", "[1/5]")
+    _divider()
+    # Ground-truth Bach MIDI recordings — runs first so cello suite files
+    # are available even if a later step fails.  Files land in
+    # data/raw/bach_js/{cello,keyboard,violin}/ and are attributed to 'bach'
+    # by COMPOSER_ALIASES in check_bronze_integrity.
+    # jsbach.net is a small personal site; SSL is disabled (HTTP only).
+    await JSBachNetExtractor(staging_root=STAGING_ROOT).run()
+
+    # ── [2/5] Bulk MusicXML ───────────────────────────────────────────────
+    _section("Bulk MusicXML — Bach-370-Chorales + OpenScore (git clone)", "[2/5]")
+    _divider()
+    # Single-archive downloads via git clone --depth 1 (fallback: ZIP).
+    # No per-file crawl delay — each dataset is one network operation.
+    # Files land in data/raw/bulk_xml/<dataset>/ and are attributed to 'bach'
+    # by COMPOSER_ALIASES in check_bronze_integrity.
+    # Targets Bach-only datasets (both verified to exist on GitHub 2026-04-04).
+    # openscore-bach-chorales was removed — that repo does not exist (GitHub 404).
+    await BulkXMLExtractor(
+        staging_root=STAGING_ROOT,
+        datasets=["bach-chorales-370", "bach-chorales-371"],
+    ).run()
+
+    # ── [3/5] KernScores ──────────────────────────────────────────────────
+    _section("KernScores — J.S. Bach Humdrum corpus (CLI)", "[3/5]")
     _divider()
     # KernScoresBachExtractor uses subprocess (humcat/humsplit/hum2mid),
     # so no HTTP session is involved.  run() is still async for interface
     # consistency with the other extractors.
     await KernScoresBachExtractor(staging_root=STAGING_ROOT).run()
 
-    # ── [2/3] Mutopia ─────────────────────────────────────────────────────
-    _section("Mutopia Project — MusicXML-first Baroque scores", "[2/3]")
+    # ── [4/5] Mutopia ─────────────────────────────────────────────────────
+    _section("Mutopia Project — MusicXML-first Baroque scores", "[4/5]")
     _divider()
     # Mutopia is run before KunstDerFuge because it provides higher-quality
     # MusicXML files.  If a piece exists in both sources the Transform phase
     # will prefer .xml over .mid at load time.
     await MutopiaExtractor(staging_root=STAGING_ROOT).run()
 
-    # ── [3/3] KunstDerFuge ────────────────────────────────────────────────
-    _section("KunstDerFuge — MIDI corpus (Bach + Baroque)", "[3/3]")
+    # ── [5/5] KunstDerFuge ────────────────────────────────────────────────
+    _section("KunstDerFuge — MIDI corpus (Bach + Baroque)", "[5/5]")
     _divider()
     # KunstDerFugeExtractor defaults to ALL_COMPOSERS (Bach + 8 other
     # Baroque composers) in a single pass, processing each composer's

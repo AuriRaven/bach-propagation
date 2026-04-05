@@ -46,6 +46,15 @@ _SKIP_NAMES: frozenset[str] = frozenset({
     "MASTER_CATALOG.json",
 })
 
+#: Maps a top-level staging subdirectory name to its canonical composer slug.
+#: Used when a specialised extractor writes to its own folder (e.g. ``bach_js/``)
+#: rather than directly under the composer name.  Entries here are rolled into
+#: the canonical name for reporting purposes while the on-disk layout is kept.
+COMPOSER_ALIASES: dict[str, str] = {
+    "bach_js":  "bach",   # jsbach.net MIDI downloads (JSBachNetExtractor)
+    "bulk_xml": "bach",   # bulk MusicXML archives — all registered datasets are Bach
+}
+
 #: Extensions that are metadata / tooling, not score files.
 _SKIP_EXTS: frozenset[str] = frozenset({
     ".json", ".py", ".pyc", ".txt", ".md", ".log", ".ini", ".cfg",
@@ -84,11 +93,14 @@ def scan_staging_area(root: Path) -> dict:
         by_format[ext] += 1
 
         # The first path component under root is the composer slug.
+        # Apply COMPOSER_ALIASES so specialised extractor subdirectories
+        # (e.g. ``bach_js/``, ``bulk_xml/``) roll up to their canonical name.
         try:
             parts = path.relative_to(root).parts
-            composer = parts[0] if parts else "unknown"
+            raw_composer = parts[0] if parts else "unknown"
         except ValueError:
-            composer = "unknown"
+            raw_composer = "unknown"
+        composer = COMPOSER_ALIASES.get(raw_composer, raw_composer)
         by_composer[composer] += 1
 
         if path.stat().st_size == 0:

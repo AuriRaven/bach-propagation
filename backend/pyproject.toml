@@ -17,6 +17,8 @@ dependencies = [
     "aiohttp>=3.9",
     "tenacity>=8.2",
     "beautifulsoup4>=4.12",
+    "pandas>=3.0.2",
+    "tqdm>=4.67.3",
 ]
 
 [project.optional-dependencies]
@@ -28,3 +30,9 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+]

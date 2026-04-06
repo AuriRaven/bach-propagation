@@ -13,6 +13,15 @@ dependencies = [
     "matplotlib>=3.9",
     "scikit-learn>=1.5",
     "scipy>=1.14",
+    # ETL pipeline
+    "aiohttp>=3.9",
+    "tenacity>=8.2",
+    "beautifulsoup4>=4.12",
+    "pandas>=3.0.2",
+    "tqdm>=4.67.3",
+    "supabase>=2.28.3",
+    "python-dotenv>=1.2.2",
+    "openai>=2.30.0",
 ]
 
 [project.optional-dependencies]
@@ -24,3 +33,9 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+]

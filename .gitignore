@@ -14,7 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+backend/lib/
+**/site-packages/
 lib64/
 parts/
 sdist/
@@ -51,7 +52,14 @@ backend/data/
 backend/results/
 backend/outputs/
 backend/logs/
-backend/notebooks/
+
+# --- EXCEPCIONES PARA NOTEBOOKS ---
+!backend/notebooks/
+!backend/notebooks/*.ipynb
+
+# --- BASURA DE JUPYTER (Ignorar siempre) ---
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
 
 # Ignoramos archivos binarios y de salida en cualquier nivel
 *.mid
@@ -70,6 +78,10 @@ backend/notebooks/
 !**/package.json
 !**/tsconfig.json
 !**/pyproject.toml
+
+# Permitir la carpeta lib del frontend
+!frontend/lib/
+!frontend/lib/*.ts
 
 # --- Artefactos de IA / Modelos ---
 *.pt

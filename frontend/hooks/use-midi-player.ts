@@ -1,12 +1,10 @@
 /**
  * frontend/hooks/use-midi-player.ts
  *
- * Tone.js MIDI playback hook.
- * Loads the MIDI file from activeScore.signed_url, schedules all notes via
- * Tone.Transport, and ticks AppState.playbackPosition every 16th note so
- * VexFlowRenderer can move its cursor in real time.
- *
- * Install: pnpm add tone @tonejs/midi
+ * Tone.js MIDI playback. Fixes:
+ *   - Playhead calculation uses transport.seconds → beats (not BBT string)
+ *   - Proper teardown between piece loads
+ *   - No looping (Transport.loop = false)
  */
 
 "use client"
@@ -14,131 +12,134 @@
 import { useEffect, useRef, useCallback } from "react"
 import { useAppState } from "@/lib/app-state"
 
-// Lazy-load Tone.js and @tonejs/midi — both are client-side only
-async function getTone() {
-  const Tone = await import("tone")
-  return Tone
-}
-
-async function getMidi(url: string) {
-  const { Midi } = await import("@tonejs/midi")
-  const arrayBuffer = await fetch(url).then((r) => r.arrayBuffer())
-  return new Midi(arrayBuffer)
-}
-
 export function useMidiPlayer() {
-  const { activeScore, setPlaybackState, setPlaybackPosition, playbackState } =
-    useAppState()
+  const {
+    activeScore,
+    setPlaybackState,
+    setPlaybackPosition,
+    playbackState,
+  } = useAppState()
 
-  const synthsRef  = useRef<import("tone").PolySynth[]>([])
-  const tickerRef  = useRef<import("tone").ToneEventCallback | null>(null)
-  const loadedUrl  = useRef<string | null>(null)
-  const isSetup    = useRef(false)
+  const loadedUrlRef  = useRef<string | null>(null)
+  const synthsRef     = useRef<import("tone").PolySynth[]>([])
+  const tickEventRef  = useRef<number | null>(null)   // Tone event ID for the repeat ticker
+  const isReadyRef    = useRef(false)
 
-  // ── Teardown helper ──────────────────────────────────────────────────────
+  // ── Teardown — stop transport, dispose synths, cancel all events ─────────
   const teardown = useCallback(async () => {
-    const Tone = await getTone()
-    Tone.getTransport().stop()
-    Tone.getTransport().cancel()
+    const Tone = await import("tone")
+    const transport = Tone.getTransport()
+
+    transport.stop()
+    transport.cancel()       // removes all scheduled events
+    transport.loop = false
+    transport.position = "0:0:0"
+
     for (const s of synthsRef.current) {
-      s.releaseAll()
-      s.dispose()
+      try { s.releaseAll(); s.dispose() } catch { /* already disposed */ }
     }
-    synthsRef.current = []
-    loadedUrl.current = null
-    isSetup.current = false
+    synthsRef.current  = []
+    tickEventRef.current = null
+    loadedUrlRef.current = null
+    isReadyRef.current   = false
   }, [])
 
-  // ── Load + schedule MIDI whenever activeScore.signed_url changes ─────────
+  // ── Load MIDI when activeScore.signed_url changes ────────────────────────
   useEffect(() => {
     if (!activeScore?.signed_url) return
-    if (loadedUrl.current === activeScore.signed_url) return
+    if (loadedUrlRef.current === activeScore.signed_url) return
 
     void (async () => {
-      const Tone = await getTone()
+      const Tone = await import("tone")
+      const { Midi } = await import("@tonejs/midi")
+
       await teardown()
 
-      const midi = await getMidi(activeScore.signed_url!)
-      loadedUrl.current = activeScore.signed_url!
+      // Fetch and parse MIDI
+      let midi: InstanceType<typeof Midi>
+      try {
+        const buf = await fetch(activeScore.signed_url!).then((r) => r.arrayBuffer())
+        midi = new Midi(buf)
+      } catch (err) {
+        console.error("[useMidiPlayer] MIDI fetch failed:", err)
+        return
+      }
+
+      loadedUrlRef.current = activeScore.signed_url!
 
       const transport = Tone.getTransport()
       transport.bpm.value = midi.header.tempos[0]?.bpm ?? 120
+      transport.loop      = false   // never loop — prevents playhead reset
 
-      // Schedule every track
+      // Schedule notes from all tracks
       for (const track of midi.tracks) {
+        if (track.notes.length === 0) continue
+
         const synth = new Tone.PolySynth(Tone.Synth, {
           oscillator: { type: "triangle" },
-          envelope: { attack: 0.02, decay: 0.1, sustain: 0.5, release: 0.8 },
-          volume: -12,
+          envelope:   { attack: 0.02, decay: 0.1, sustain: 0.5, release: 0.8 },
+          volume:     -14,
         }).toDestination()
 
         synthsRef.current.push(synth)
 
         for (const note of track.notes) {
           transport.schedule((time) => {
-            synth.triggerAttackRelease(
-              note.name,
-              note.duration,
-              time,
-              note.velocity,
-            )
+            synth.triggerAttackRelease(note.name, note.duration, time, note.velocity)
           }, note.time)
         }
       }
 
-      // Tick playback position every 16th note
-      transport.scheduleRepeat((time) => {
-        // Convert Tone.Transport position to quarter beats
-        const [bars, beats, sixteenths] = String(transport.position)
-          .split(":")
-          .map(Number)
-        const beatsPerBar =
-          midi.header.timeSignatures[0]?.timeSignature[0] ?? 4
-        const quarterBeat =
-          bars * beatsPerBar + beats + sixteenths / 4
-        setPlaybackPosition(quarterBeat)
+      // ── Tick: update playback position every 64ms (~15fps) ──────────────
+      // Uses transport.seconds (absolute seconds elapsed) converted to beats.
+      // This is monotonically increasing and never resets mid-playback.
+      const bpm = transport.bpm.value
+      const tickId = transport.scheduleRepeat(() => {
+        const seconds    = transport.seconds          // seconds since transport start
+        const beatPosition = seconds * (bpm / 60)    // quarter beats elapsed
+        setPlaybackPosition(beatPosition)
       }, "16n")
 
-      isSetup.current = true
+      tickEventRef.current = tickId as unknown as number
+      isReadyRef.current   = true
     })()
 
-    return () => {
-      void teardown()
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { void teardown() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeScore?.signed_url])
 
   // ── Controls ──────────────────────────────────────────────────────────────
 
   const play = useCallback(async () => {
-    const Tone = await getTone()
-    // AudioContext must be resumed on user gesture
-    await Tone.start()
+    if (!isReadyRef.current) return
+    const Tone = await import("tone")
+    await Tone.start()                    // resume AudioContext on user gesture
     Tone.getTransport().start()
     setPlaybackState("playing")
   }, [setPlaybackState])
 
   const pause = useCallback(async () => {
-    const Tone = await getTone()
+    const Tone = await import("tone")
     Tone.getTransport().pause()
     setPlaybackState("paused")
   }, [setPlaybackState])
 
   const stop = useCallback(async () => {
-    const Tone = await getTone()
-    Tone.getTransport().stop()
-    Tone.getTransport().position = "0:0:0"
+    const Tone = await import("tone")
+    const transport = Tone.getTransport()
+    transport.stop()
+    transport.position = "0:0:0"
     setPlaybackState("stopped")
     setPlaybackPosition(0)
   }, [setPlaybackState, setPlaybackPosition])
 
   const seekTo = useCallback(async (beat: number) => {
-    const Tone = await getTone()
-    // Convert quarter beats to Tone.js time string
-    Tone.getTransport().position = `${beat}i` // ticks — use seconds instead
-    const seconds = Tone.getTransport().toSeconds(`${beat * 60 / Tone.getTransport().bpm.value}`)
-    Tone.getTransport().seconds = beat * (60 / Tone.getTransport().bpm.value)
-  }, [])
+    const Tone  = await import("tone")
+    const bpm   = Tone.getTransport().bpm.value
+    const secs  = beat / (bpm / 60)
+    Tone.getTransport().seconds = secs
+    setPlaybackPosition(beat)
+  }, [setPlaybackPosition])
 
   return { play, pause, stop, seekTo, playbackState }
 }

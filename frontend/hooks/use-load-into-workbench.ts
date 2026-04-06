@@ -29,17 +29,19 @@ export function useLoadIntoWorkbench() {
     setPlaybackState("stopped")
     setPlaybackPosition(0)
 
+    // ── Clear stale data immediately so old piano roll never flashes ──────
+    setActiveScore(null)
+    setNotationData(null)
+
     try {
-      // Parallel fetch — file details (incl. signed_url) + notation payload
       const [file, notation] = await Promise.all([
         api.corpus.get(corpusFileId),
         api.corpus.notation(corpusFileId),
       ])
 
-      // Atomic hydration — both must succeed before switching views
       setActiveScore(file)
       setNotationData(notation)
-      setActiveNav("New Composition")   // matches ViewType in bach-workbench.tsx
+      setActiveNav("New Composition")
     } catch (err) {
       console.error("[useLoadIntoWorkbench]", err)
       throw err

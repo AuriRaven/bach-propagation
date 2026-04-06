@@ -7,7 +7,11 @@
 
 import type { CorpusFile, VexFlowPayload } from "./app-state"
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+// Support both env var names for compatibility with docker-compose
+const BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  "http://localhost:8000"
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -16,16 +20,33 @@ export class ApiError extends Error {
   }
 }
 
-async function fetcher<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  })
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText)
-    throw new ApiError(res.status, text)
+async function fetcher<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = 8_000,
+): Promise<T> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await fetch(`${BASE_URL}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      ...init,
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText)
+      throw new ApiError(res.status, text)
+    }
+    return res.json() as Promise<T>
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new ApiError(408, `Request timed out after ${timeoutMs / 1000}s`)
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
   }
-  return res.json() as Promise<T>
 }
 
 // ─── Response types ───────────────────────────────────────────────────────────
@@ -123,8 +144,10 @@ export const api = {
       return fetcher<CorpusFile>(`/api/corpus/${id}`)
     },
 
-    notation(id: string): Promise<VexFlowPayload> {
-      return fetcher<VexFlowPayload>(`/api/corpus/${id}/notation`)
+    notation(id: string, refresh = false): Promise<VexFlowPayload> {
+      // music21 parsing takes 10–45s on first load; subsequent calls hit cache
+      const qs = refresh ? "?refresh=true" : ""
+      return fetcher<VexFlowPayload>(`/api/corpus/${id}/notation${qs}`, undefined, 60_000)
     },
 
     search(query: string, limit = 10): Promise<CorpusFile[]> {

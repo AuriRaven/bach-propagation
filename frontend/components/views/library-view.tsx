@@ -468,6 +468,25 @@ export function LibraryView() {
   )
 }
 
+// ─── Display name helper — derives a readable title when movement_name is null ──
+
+function getDisplayName(file: CorpusFile): string {
+  if (file.movement_name && file.movement_name.trim()) return file.movement_name
+
+  // Build from BWV + collection + key
+  const parts: string[] = []
+  if (file.bwv) parts.push(`BWV ${file.bwv}`)
+
+  const col = file.collection
+    ? file.collection.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+    : null
+  if (col) parts.push(col)
+
+  if (file.key_signature) parts.push(`in ${file.key_signature}`)
+
+  return parts.length > 0 ? parts.join(" · ") : "Untitled"
+}
+
 // ─── Table row ────────────────────────────────────────────────────────────────
 
 function CorpusRow({
@@ -487,17 +506,18 @@ function CorpusRow({
 
   const ks = (file.key_signature ?? "").toLowerCase()
   const isMinor = ks.includes("minor")
+  const displayName = getDisplayName(file)
 
   return (
     <tr className="border-b border-border/50 hover:bg-primary/5 transition-colors group">
       <td className="p-4">
-        <span className="font-serif font-medium">{file.movement_name ?? "Untitled"}</span>
+        <span className="font-serif font-medium">{displayName}</span>
       </td>
       <td className="p-4">
         <span className="text-sm text-muted-foreground font-mono">{file.bwv ?? "—"}</span>
       </td>
       <td className="p-4">
-        <span className="text-sm text-muted-foreground capitalize">{file.collection}</span>
+        <span className="text-sm text-muted-foreground capitalize">{file.collection?.replace(/_/g, " ")}</span>
       </td>
       <td className="p-4">
         <span className="text-sm text-muted-foreground">{file.key_signature ?? "—"}</span>

@@ -78,7 +78,10 @@ export default function BachWorkbench() {
   // ── Header title — show real score name when in Composition view ──────────
   const getHeaderTitle = () => {
     if (activeNav === "New Composition" && activeScore) {
-      const name = activeScore.movement_name ?? `BWV ${activeScore.bwv}` ?? "UNTITLED"
+      const name = activeScore.movement_name?.trim()
+        || (activeScore.bwv ? `BWV ${activeScore.bwv}` : null)
+        || activeScore.collection?.replace(/_/g, " ")
+        || "UNTITLED"
       return name.toUpperCase()
     }
     switch (activeNav) {

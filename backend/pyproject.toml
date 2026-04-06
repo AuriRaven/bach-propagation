@@ -19,6 +19,9 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "pandas>=3.0.2",
     "tqdm>=4.67.3",
+    "supabase>=2.28.3",
+    "python-dotenv>=1.2.2",
+    "openai>=2.30.0",
 ]
 
 [project.optional-dependencies]

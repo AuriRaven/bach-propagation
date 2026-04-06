@@ -33,7 +33,7 @@ export default function BachWorkbench() {
   const [complexity, setComplexity] = useState([75])
   const [counterpoint, setCounterpoint] = useState([60])
   const [ornamentation, setOrnamentation] = useState([42])
-  const [activeNav, setActiveNav] = useState<ViewType>("New Composition")
+  const [activeNav, setActiveNav] = useState<ViewType>("Library")
 
   const navItems = [
     { name: "Library" as const, icon: Library },

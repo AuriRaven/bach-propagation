@@ -1,10 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
-# Esta es la variable "app" que Uvicorn está buscando
+load_dotenv()
+
+from routers.corpus import corpus_router
+from routers.ai_chat import ai_router
+
 app = FastAPI(title="Motif AI - Bach Propagation")
 
-# Configuración de CORS para que tu frontend en el puerto 3000 pueda hablar con el backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -12,6 +16,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(corpus_router, prefix="/api")
+app.include_router(ai_router, prefix="/api")
+
 
 @app.get("/")
 def read_root():

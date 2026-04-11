@@ -4,8 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from routers.corpus import corpus_router
-from routers.ai_chat import ai_router
+from routers.corpus   import corpus_router
+from routers.ai_chat  import ai_router
+from routers.analysis import analysis_router
 
 app = FastAPI(title="Motif AI - Bach Propagation")
 
@@ -17,8 +18,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(corpus_router, prefix="/api")
-app.include_router(ai_router, prefix="/api")
+app.include_router(corpus_router,   prefix="/api")
+app.include_router(ai_router,       prefix="/api")
+app.include_router(analysis_router, prefix="/api")
 
 
 @app.get("/")

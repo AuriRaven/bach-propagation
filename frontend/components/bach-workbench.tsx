@@ -2,41 +2,26 @@
 
 import { useState } from "react"
 import {
-  Play,
-  Pause,
-  Square,
-  Undo2,
-  Redo2,
-  Library,
-  FilePlus,
-  BarChart3,
-  Settings,
-  RefreshCw,
-  Sparkles,
-  Loader2,
+  Play, Pause, Square, Undo2, Redo2,
+  Library, FilePlus, BarChart3, Settings,
+  RefreshCw, Sparkles, Loader2,
 } from "lucide-react"
 import { Slider } from "@/components/ui/slider"
 import { Button } from "@/components/ui/button"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
 import { CompositionView } from "@/components/views/composition-view"
-import { AnalysisView } from "@/components/views/analysis-view"
-import { LibraryView } from "@/components/views/library-view"
-import { SettingsView } from "@/components/views/settings-view"
+import { AnalysisView }    from "@/components/views/analysis-view"
+import { LibraryView }     from "@/components/views/library-view"
+import { SettingsView }    from "@/components/views/settings-view"
 
-// ── AppState + playback hook ──────────────────────────────────────────────────
 import { useAppState } from "@/lib/app-state"
 import { useMidiPlayer } from "@/hooks/use-midi-player"
 
-// ViewType stays identical to the original
 type ViewType = "Library" | "New Composition" | "Analysis" | "Settings"
 
-// ── Loading overlay (shown during load-into-workbench transition) ─────────────
+// ── Loading overlay ───────────────────────────────────────────────────────────
 function WorkbenchLoadingOverlay() {
   return (
     <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center">
@@ -50,32 +35,79 @@ function WorkbenchLoadingOverlay() {
   )
 }
 
+// ── Progress scrubber ─────────────────────────────────────────────────────────
+function ProgressScrubber({
+  position,
+  duration,
+  onSeek,
+  disabled,
+}: {
+  position: number
+  duration: number
+  onSeek: (beat: number) => void
+  disabled: boolean
+}) {
+  const pct     = duration > 0 ? Math.min((position / duration) * 100, 100) : 0
+  const minutes = (s: number) => {
+    const secs = Math.round(s)
+    return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`
+  }
+  // Approximate seconds from beats at 120 BPM for display (visual only)
+  const posDisplay = minutes(position * 0.5)
+  const durDisplay = minutes(duration * 0.5)
+
+  return (
+    <div className="flex items-center gap-2 flex-1 max-w-xs">
+      <span className="text-xs text-muted-foreground font-mono w-8 text-right tabular-nums">
+        {posDisplay}
+      </span>
+      <div className="flex-1 relative h-1.5 bg-muted rounded-full overflow-hidden">
+        {/* Filled track */}
+        <div
+          className="absolute left-0 top-0 h-full bg-primary rounded-full transition-none"
+          style={{ width: `${pct}%` }}
+        />
+        {/* Invisible range input for interaction */}
+        <input
+          type="range"
+          min={0}
+          max={Math.max(duration, 1)}
+          step={0.25}
+          value={position}
+          disabled={disabled}
+          onChange={(e) => onSeek(parseFloat(e.target.value))}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-default"
+        />
+      </div>
+      <span className="text-xs text-muted-foreground font-mono w-8 tabular-nums">
+        {durDisplay}
+      </span>
+    </div>
+  )
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function BachWorkbench() {
-  // ── Local UI state (unchanged from original) ──────────────────────────────
   const [complexity, setComplexity]       = useState([75])
   const [counterpoint, setCounterpoint]   = useState([60])
   const [ornamentation, setOrnamentation] = useState([42])
 
-  // ── Global state (replaces local activeNav useState) ─────────────────────
   const {
-    activeNav,
-    setActiveNav,
+    activeNav, setActiveNav,
     activeScore,
-    playbackState,
+    playbackState, playbackPosition,
     isLoadingWorkbench,
   } = useAppState()
 
-  // ── Playback controls (wired to toolbar Play/Stop buttons) ───────────────
-  const { play, pause, stop } = useMidiPlayer()
+  const { play, pause, stop, seekTo, durationBeats } = useMidiPlayer()
 
   const navItems = [
-    { name: "Library"         as const, icon: Library  },
-    { name: "New Composition" as const, icon: FilePlus  },
-    { name: "Analysis"        as const, icon: BarChart3 },
-    { name: "Settings"        as const, icon: Settings  },
+    { name: "Library"         as const, icon: Library   },
+    { name: "New Composition" as const, icon: FilePlus   },
+    { name: "Analysis"        as const, icon: BarChart3  },
+    { name: "Settings"        as const, icon: Settings   },
   ]
 
-  // ── Header title — show real score name when in Composition view ──────────
   const getHeaderTitle = () => {
     if (activeNav === "New Composition" && activeScore) {
       const name = activeScore.movement_name?.trim()
@@ -86,22 +118,13 @@ export default function BachWorkbench() {
     }
     switch (activeNav) {
       case "New Composition": return "NEW COMPOSITION"
-      case "Analysis":        return "HARMONIC ANALYSIS - BWV 775"
+      case "Analysis":        return "HARMONIC ANALYSIS"
       case "Library":         return "BAROQUE CORPUS EXPLORER"
       case "Settings":        return "WORKBENCH SETTINGS"
       default:                return ""
     }
   }
 
-  // ── Status bar measure counter ────────────────────────────────────────────
-  const getMeasureStatus = () => {
-    if (activeNav === "New Composition" && activeScore?.num_measures) {
-      return `MEASURES: ${activeScore.num_measures}`
-    }
-    return "CURRENT MEASURE: 12 / 32"
-  }
-
-  // ── View router ───────────────────────────────────────────────────────────
   const renderMainContent = () => {
     switch (activeNav) {
       case "New Composition": return <CompositionView />
@@ -112,39 +135,26 @@ export default function BachWorkbench() {
     }
   }
 
-  // ── Playback button handler — toggle play/pause, or play from stopped ─────
   const handlePlayPause = async () => {
-    if (playbackState === "playing") {
-      await pause()
-    } else {
-      await play()
-    }
+    if (playbackState === "playing") await pause()
+    else await play()
   }
+
+  const isInComposition = activeNav === "New Composition"
+  const hasScore        = !!activeScore
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-
-      {/* Global loading overlay — shown during load-into-workbench */}
       {isLoadingWorkbench && <WorkbenchLoadingOverlay />}
 
-      {/* ── Sidebar (unchanged) ────────────────────────────────────────── */}
+      {/* ── Sidebar ──────────────────────────────────────────────────────── */}
       <aside className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col">
-        {/* Logo */}
         <div className="p-4 flex items-center gap-3">
-          <div
-            className="w-10 h-10 rounded-lg flex items-center justify-center overflow-hidden"
-            style={{ border: "1px solid rgba(167, 139, 250, 0.2)" }}
-          >
-            <img
-              key="logo-motif-ai"
-              src="/logo-motif-ai.png"
-              alt="Bach Propagation Logo"
+          <div className="w-10 h-10 rounded-lg flex items-center justify-center overflow-hidden"
+            style={{ border: "1px solid rgba(167, 139, 250, 0.2)" }}>
+            <img src="/logo-motif-ai.png" alt="Bach Propagation Logo"
               className="w-10 h-10 object-contain"
-              style={{
-                filter:
-                  "brightness(1.2) contrast(1.1) drop-shadow(0 0 8px rgba(168, 130, 255, 0.6)) drop-shadow(0 0 16px rgba(168, 130, 255, 0.4))",
-              }}
-            />
+              style={{ filter: "brightness(1.2) contrast(1.1) drop-shadow(0 0 8px rgba(168, 130, 255, 0.6))" }} />
           </div>
           <div>
             <h1 className="font-serif text-lg font-semibold tracking-tight">Bach Propagation</h1>
@@ -152,43 +162,28 @@ export default function BachWorkbench() {
           </div>
         </div>
 
-        {/* Navigation */}
         <nav className="flex-1 px-3 py-4">
           {navItems.map((item) => (
-            <button
-              key={item.name}
-              onClick={() => setActiveNav(item.name)}
+            <button key={item.name} onClick={() => setActiveNav(item.name)}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors font-serif ${
                 activeNav === item.name
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
                   : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-              }`}
-            >
+              }`}>
               <item.icon className="w-5 h-5" />
               <span>{item.name}</span>
             </button>
           ))}
         </nav>
 
-        {/* Neural Engine card */}
         <div className="p-4">
           <div className="bg-card rounded-lg p-4 border border-border">
             <div className="h-16 mb-3 relative">
               <svg className="w-full h-full" viewBox="0 0 200 60">
-                <path
-                  d="M0,30 Q20,10 40,30 T80,30 T120,30 T160,30 T200,30"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  className="text-primary/40"
-                />
-                <path
-                  d="M0,30 Q25,45 50,30 T100,30 T150,30"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  className="text-accent/60"
-                />
+                <path d="M0,30 Q20,10 40,30 T80,30 T120,30 T160,30 T200,30"
+                  fill="none" stroke="currentColor" strokeWidth="2" className="text-primary/40" />
+                <path d="M0,30 Q25,45 50,30 T100,30 T150,30"
+                  fill="none" stroke="currentColor" strokeWidth="2" className="text-accent/60" />
               </svg>
             </div>
             <p className="text-xs text-accent uppercase tracking-wider font-semibold text-center">
@@ -202,81 +197,79 @@ export default function BachWorkbench() {
         </div>
       </aside>
 
-      {/* ── Main Content ──────────────────────────────────────────────────── */}
-      <main className="flex-1 flex flex-col">
+      {/* ── Main Content ─────────────────────────────────────────────────── */}
+      <main className="flex-1 flex flex-col min-w-0">
         {/* Toolbar */}
-        <header className="h-14 border-b border-border flex items-center justify-between px-4">
-          <div className="flex items-center gap-2">
-            {/* Play / Pause — wired to useMidiPlayer */}
-            <Button
-              variant="ghost"
-              size="icon"
+        <header className="h-14 border-b border-border flex items-center gap-3 px-4 shrink-0">
+          {/* Transport controls */}
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon"
               className="text-muted-foreground hover:text-foreground"
               onClick={handlePlayPause}
-              disabled={activeNav !== "New Composition" || !activeScore}
-              title={playbackState === "playing" ? "Pause" : "Play"}
-            >
+              disabled={!isInComposition || !hasScore}
+              title={playbackState === "playing" ? "Pause" : "Play"}>
               {playbackState === "playing"
-                ? <Pause className="w-5 h-5" />
-                : <Play  className="w-5 h-5" />
-              }
+                ? <Pause className="w-4 h-4" />
+                : <Play  className="w-4 h-4" />}
             </Button>
-
-            {/* Stop */}
-            <Button
-              variant="ghost"
-              size="icon"
+            <Button variant="ghost" size="icon"
               className="text-muted-foreground hover:text-foreground"
               onClick={() => void stop()}
-              disabled={activeNav !== "New Composition" || playbackState === "stopped"}
-              title="Stop"
-            >
+              disabled={!isInComposition || playbackState === "stopped"}
+              title="Stop">
               <Square className="w-4 h-4" />
             </Button>
-
-            <div className="w-px h-6 bg-border mx-2" />
-
-            {/* Undo / Redo — static for now */}
-            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
-              <Undo2 className="w-5 h-5" />
-            </Button>
-            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
-              <Redo2 className="w-5 h-5" />
-            </Button>
           </div>
 
-          <div className="flex items-center gap-4">
-            <h2 className="font-mono text-sm tracking-widest text-muted-foreground">
-              {getHeaderTitle()}
-            </h2>
-            <span className="px-3 py-1 rounded-full border border-primary text-primary text-xs font-semibold">
-              AI ASSISTED
-            </span>
-          </div>
+          {/* Progress scrubber — only visible in composition view */}
+          {isInComposition && hasScore && (
+            <ProgressScrubber
+              position={playbackPosition}
+              duration={durationBeats}
+              onSeek={(b) => void seekTo(b)}
+              disabled={playbackState === "stopped" && durationBeats === 0}
+            />
+          )}
+
+          <div className="w-px h-6 bg-border mx-1" />
+
+          <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
+            <Undo2 className="w-4 h-4" />
+          </Button>
+          <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
+            <Redo2 className="w-4 h-4" />
+          </Button>
+
+          <div className="flex-1" />
+
+          <h2 className="font-mono text-xs tracking-widest text-muted-foreground truncate max-w-xs">
+            {getHeaderTitle()}
+          </h2>
+          <span className="px-3 py-1 rounded-full border border-primary text-primary text-xs font-semibold shrink-0">
+            AI ASSISTED
+          </span>
         </header>
 
-        {/* Dynamic Content Area */}
+        {/* Content */}
         <div className="flex-1 p-6 overflow-auto">
           {renderMainContent()}
         </div>
 
-        {/* Status Bar */}
-        <footer className="h-8 border-t border-border flex items-center justify-between px-4 text-xs text-muted-foreground">
+        {/* Status bar */}
+        <footer className="h-8 border-t border-border flex items-center justify-between px-4 text-xs text-muted-foreground shrink-0">
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-2">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  playbackState === "playing"
-                    ? "bg-accent animate-pulse"
-                    : "bg-muted-foreground"
-                }`}
-              />
+              <span className={`w-2 h-2 rounded-full ${
+                playbackState === "playing" ? "bg-accent animate-pulse" : "bg-muted-foreground"
+              }`} />
               AI STATUS:{" "}
               <span className="text-accent font-semibold">
                 {playbackState === "playing" ? "PLAYING" : "READY"}
               </span>
             </span>
-            <span>{getMeasureStatus()}</span>
+            {activeScore?.num_measures && (
+              <span>MEASURES: {activeScore.num_measures}</span>
+            )}
           </div>
           <div className="flex items-center gap-4">
             <span>LATENCY: 14MS</span>
@@ -285,7 +278,7 @@ export default function BachWorkbench() {
         </footer>
       </main>
 
-      {/* ── Right Panel — AI Control (unchanged) ─────────────────────────── */}
+      {/* ── Right Panel ──────────────────────────────────────────────────── */}
       <aside className="w-80 border-l border-border bg-background p-6 flex flex-col">
         <div className="flex items-center gap-3 mb-2">
           <Sparkles className="w-6 h-6 text-primary" />
@@ -293,16 +286,11 @@ export default function BachWorkbench() {
         </div>
         <p className="text-sm text-muted-foreground mb-6">Generative Counterpoint Settings</p>
 
-        {/* Key & Time Selectors */}
         <div className="grid grid-cols-2 gap-4 mb-8">
           <div>
-            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">
-              Key
-            </label>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Key</label>
             <Select defaultValue="d-minor">
-              <SelectTrigger className="bg-card border-border">
-                <SelectValue placeholder="Select key" />
-              </SelectTrigger>
+              <SelectTrigger className="bg-card border-border"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="c-major">C Major</SelectItem>
                 <SelectItem value="d-minor">D Minor</SelectItem>
@@ -312,13 +300,9 @@ export default function BachWorkbench() {
             </Select>
           </div>
           <div>
-            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">
-              Time
-            </label>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Time</label>
             <Select defaultValue="3-8">
-              <SelectTrigger className="bg-card border-border">
-                <SelectValue placeholder="Select time" />
-              </SelectTrigger>
+              <SelectTrigger className="bg-card border-border"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="4-4">4/4</SelectItem>
                 <SelectItem value="3-4">3/4</SelectItem>
@@ -329,35 +313,23 @@ export default function BachWorkbench() {
           </div>
         </div>
 
-        {/* Sliders */}
         <div className="space-y-6 mb-8">
-          <div>
-            <div className="flex justify-between items-center mb-3">
-              <label className="text-sm font-medium">Complexity</label>
-              <span className="text-sm text-primary font-semibold">{complexity[0]}%</span>
+          {[
+            { label: "Complexity",          value: complexity,    set: setComplexity },
+            { label: "Counterpoint Density",value: counterpoint,  set: setCounterpoint },
+            { label: "Ornamentation",       value: ornamentation, set: setOrnamentation },
+          ].map(({ label, value, set }) => (
+            <div key={label}>
+              <div className="flex justify-between items-center mb-3">
+                <label className="text-sm font-medium">{label}</label>
+                <span className="text-sm text-primary font-semibold">{value[0]}%</span>
+              </div>
+              <Slider value={value} onValueChange={set} max={100} step={1}
+                className="[&_[role=slider]]:bg-primary [&_[role=slider]]:border-primary" />
             </div>
-            <Slider value={complexity} onValueChange={setComplexity} max={100} step={1}
-              className="[&_[role=slider]]:bg-primary [&_[role=slider]]:border-primary" />
-          </div>
-          <div>
-            <div className="flex justify-between items-center mb-3">
-              <label className="text-sm font-medium">Counterpoint Density</label>
-              <span className="text-sm text-primary font-semibold">{counterpoint[0]}%</span>
-            </div>
-            <Slider value={counterpoint} onValueChange={setCounterpoint} max={100} step={1}
-              className="[&_[role=slider]]:bg-primary [&_[role=slider]]:border-primary" />
-          </div>
-          <div>
-            <div className="flex justify-between items-center mb-3">
-              <label className="text-sm font-medium">Ornamentation</label>
-              <span className="text-sm text-primary font-semibold">{ornamentation[0]}%</span>
-            </div>
-            <Slider value={ornamentation} onValueChange={setOrnamentation} max={100} step={1}
-              className="[&_[role=slider]]:bg-primary [&_[role=slider]]:border-primary" />
-          </div>
+          ))}
         </div>
 
-        {/* Propagator Insight */}
         <div className="bg-card rounded-lg p-4 border border-border mb-8">
           <div className="flex items-center gap-2 mb-3">
             <Sparkles className="w-4 h-4 text-accent" />

@@ -111,7 +111,7 @@ def _row_to_model(row: dict) -> CorpusFileRow:
         bwv=row.get("bwv"),
         movement_name=row.get("movement_name"),
         collection=row.get("collection", ""),
-        storage_object_path=row.get("storage_object_path", ""),
+        storage_object_path=row.get("storage_object_path", ""),  # may be absent in corpus_full
         storage_url=row.get("storage_url"),
         load_status=row.get("load_status", ""),
         key_signature=row.get("key_signature"),
@@ -224,6 +224,7 @@ async def list_corpus(
 @corpus_router.get("/corpus/{corpus_id}", response_model=CorpusFileRow)
 async def get_corpus_file(corpus_id: str, supabase=Depends(get_supabase)):
     """Single corpus file with a fresh 1-hour signed URL."""
+    # corpus_full has all the metadata fields
     resp = (
         supabase.from_("corpus_full")
         .select("*")
@@ -235,33 +236,87 @@ async def get_corpus_file(corpus_id: str, supabase=Depends(get_supabase)):
         raise HTTPException(status_code=404, detail="Corpus file not found")
 
     row = _row_to_model(resp.data)
-    row.signed_url = _signed_url(supabase, resp.data["storage_object_path"])
-    return row
 
-
-@corpus_router.get("/corpus/{corpus_id}/notation", response_model=VexFlowPayload)
-async def get_notation(corpus_id: str, supabase=Depends(get_supabase)):
-    """
-    Returns VexFlow-ready notation payload for a corpus file.
-
-    Cache strategy: result is stored in corpus_files.raw_metadata JSONB after
-    first parse, so subsequent calls are instant.
-    """
-    file_resp = (
+    # storage_object_path lives on corpus_files, not corpus_full view
+    # fetch it separately to generate the signed URL
+    path_resp = (
         supabase.from_("corpus_files")
-        .select("id, storage_object_path, raw_metadata")
+        .select("storage_object_path")
         .eq("id", corpus_id)
         .single()
         .execute()
     )
+    storage_path = (path_resp.data or {}).get("storage_object_path", "")
+    if storage_path:
+        row.signed_url = _signed_url(supabase, storage_path)
+    else:
+        logger.warning("No storage_object_path for corpus file %s", corpus_id)
+
+    return row
+
+
+@corpus_router.get("/corpus/{corpus_id}/notation", response_model=VexFlowPayload)
+async def get_notation(
+    corpus_id: str,
+    refresh: bool = False,          # ?refresh=true busts the cache
+    supabase=Depends(get_supabase),
+):
+    """
+    Returns notation payload for a corpus file.
+
+    Cache: stored in corpus_files.raw_metadata after first parse.
+    Add ?refresh=true to force re-parse (useful when cache has 0 measures).
+    """
+    # ── 1. Fetch file row ─────────────────────────────────────────────────
+    try:
+        file_resp = (
+            supabase.from_("corpus_files")
+            .select("id, storage_object_path, raw_metadata")
+            .eq("id", corpus_id)
+            .single()
+            .execute()
+        )
+    except Exception:
+        logger.warning("raw_metadata column unavailable, falling back for %s", corpus_id)
+        file_resp = (
+            supabase.from_("corpus_files")
+            .select("id, storage_object_path")
+            .eq("id", corpus_id)
+            .single()
+            .execute()
+        )
+
     if not file_resp.data:
         raise HTTPException(status_code=404, detail="Corpus file not found")
 
+    # ── 2. Cache check — skip if refresh=true OR cache has 0 measures ────
     raw_metadata: dict = file_resp.data.get("raw_metadata") or {}
-    if "vexflow" in raw_metadata:
-        return VexFlowPayload(**raw_metadata["vexflow"])
+    cached = raw_metadata.get("vexflow")
 
-    storage_path = file_resp.data["storage_object_path"]
+    use_cache = (
+        not refresh
+        and cached is not None
+        and isinstance(cached.get("measures"), list)
+        and len(cached["measures"]) > 0   # never serve a 0-measure cache
+    )
+
+    if use_cache:
+        logger.info("Notation cache hit for %s (%d measures)", corpus_id, len(cached["measures"]))
+        return VexFlowPayload(**cached)
+
+    if cached is not None and not use_cache:
+        logger.warning(
+            "Stale/empty notation cache for %s (measures=%s) — re-parsing",
+            corpus_id,
+            len(cached.get("measures", [])) if cached else "none",
+        )
+
+    # ── 3. Download + parse ───────────────────────────────────────────────
+    storage_path = file_resp.data.get("storage_object_path", "")
+    if not storage_path:
+        raise HTTPException(status_code=422, detail="No storage path for this file")
+
+    logger.info("Parsing notation for %s (%s)", corpus_id, storage_path)
     signed = _signed_url(supabase, storage_path)
 
     try:
@@ -272,59 +327,104 @@ async def get_notation(corpus_id: str, supabase=Depends(get_supabase)):
             status_code=500, detail=f"Notation extraction failed: {exc}"
         ) from exc
 
-    supabase.from_("corpus_files").update(
-        {"raw_metadata": {**raw_metadata, "vexflow": payload.model_dump()}}
-    ).eq("id", corpus_id).execute()
+    if len(payload.measures) == 0:
+        logger.warning("Parse produced 0 measures for %s — not caching", corpus_id)
+        # Return payload anyway so frontend can show an appropriate message
+        return payload
+
+    # ── 4. Cache ──────────────────────────────────────────────────────────
+    try:
+        supabase.from_("corpus_files").update(
+            {"raw_metadata": {**raw_metadata, "vexflow": payload.model_dump()}}
+        ).eq("id", corpus_id).execute()
+        logger.info("Cached notation for %s (%d measures)", corpus_id, len(payload.measures))
+    except Exception:
+        logger.warning("Failed to cache notation for %s", corpus_id)
 
     return payload
 
 
-# ─── music21 → VexFlow (synchronous, runs in thread pool) ────────────────────
+
+# ─── music21 → notation payload (synchronous, runs in thread pool) ───────────
 
 def _parse_score_to_vexflow(signed_url: str, storage_path: str) -> VexFlowPayload:
+    """
+    Parse a MIDI or MusicXML file into a VexFlowPayload.
+
+    MIDI files: music21 does not create Measure objects automatically —
+    we call makeMeasures() to impose barlines, then extract notes.
+
+    MusicXML files: Measure objects already exist.
+
+    The payload stores every note with its absolute beat offset and MIDI pitch
+    so the piano-roll renderer can position and highlight notes precisely.
+    """
     import tempfile
     import urllib.request
     from fractions import Fraction
 
     import music21 as m21
 
-    suffix = Path(storage_path).suffix or ".mid"
+    suffix = Path(storage_path).suffix.lower() or ".mid"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         urllib.request.urlretrieve(signed_url, tmp.name)  # noqa: S310
         tmp_path = tmp.name
 
     score = m21.converter.parse(tmp_path)
 
-    # Flatten single-part scores (MuseScore quirk — mirrors score_loader.py)
-    if score.hasPartLikeStreams():
-        parts = list(score.parts)
-        if len(parts) == 1:
-            score = parts[0].flatten()
-    else:
-        score = score.flatten()
-
+    # ── Extract time + key sig before flattening ──────────────────────────
     ts_obj = score.recurse().getElementsByClass(m21.meter.TimeSignature).first()
     ks_obj = score.recurse().getElementsByClass(m21.key.KeySignature).first()
 
     time_sig_str = f"{ts_obj.numerator}/{ts_obj.denominator}" if ts_obj else "4/4"
-    key_sig_str = ks_obj.asKey().name if ks_obj else "C major"
+    key_sig_str  = ks_obj.asKey().name if ks_obj else "C major"
 
+    beats_per_measure = int(ts_obj.numerator) if ts_obj else 4
+
+    # ── Collapse to a single flat stream of notes ─────────────────────────
+    # For multi-part scores use Part 0 (melody / top voice)
+    if score.hasPartLikeStreams():
+        parts = list(score.parts)
+        working = parts[0] if parts else score
+    else:
+        working = score
+
+    # MIDI files need explicit measure creation
+    if suffix in (".mid", ".midi"):
+        working = working.flatten()
+        working = working.makeMeasures(inPlace=False)
+    else:
+        # MusicXML already has measures — just flatten within each measure
+        pass
+
+    # ── Iterate measures ──────────────────────────────────────────────────
     measures: list[VexFlowMeasure] = []
     total_beats = Fraction(0)
 
-    for i, measure in enumerate(score.getElementsByClass(m21.stream.Measure)):
+    measure_stream = list(working.getElementsByClass(m21.stream.Measure))
+    if not measure_stream:
+        # Last resort: treat the whole piece as one measure
+        working = working.flatten().makeMeasures(inPlace=False)
+        measure_stream = list(working.getElementsByClass(m21.stream.Measure))
+
+    for i, measure in enumerate(measure_stream):
         start_beat = total_beats
         dur = Fraction(measure.duration.quarterLength).limit_denominator(64)
+        if dur == 0:
+            dur = Fraction(beats_per_measure)
         end_beat = start_beat + dur
 
         notes: list[VexFlowNote] = []
         for el in measure.flatten().notesAndRests:
             el_dur = str(Fraction(el.duration.quarterLength).limit_denominator(64))
-            el_offset = str(Fraction(el.offset).limit_denominator(64))
+            # absolute beat offset = measure start + element offset within measure
+            abs_offset = float(start_beat + Fraction(el.offset).limit_denominator(64))
+            el_offset = str(abs_offset)
 
             if el.isRest:
                 notes.append(VexFlowNote(type="rest", duration=el_dur, offset=el_offset))
             elif hasattr(el, "pitches") and len(el.pitches) > 1:
+                # Chord — store all pitches + MIDI numbers for piano roll
                 notes.append(VexFlowNote(
                     type="note",
                     pitches=[str(p) for p in el.pitches],
@@ -346,6 +446,11 @@ def _parse_score_to_vexflow(signed_url: str, storage_path: str) -> VexFlowPayloa
             notes=notes,
         ))
         total_beats = end_beat
+
+    logger.info(
+        "Parsed %d measures, %.1f total beats, key=%s, time=%s",
+        len(measures), float(total_beats), key_sig_str, time_sig_str,
+    )
 
     return VexFlowPayload(
         measures=measures,

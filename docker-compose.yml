@@ -7,11 +7,13 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
-      - /app/.venv # Esto protege la carpeta creada en el build
+      - /app/.venv
     environment:
       - ENV=development
-      # Forzamos a uv a usar el path correcto
       - PATH=/app/.venv/bin:$PATH
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
 
   frontend:
     build: ./frontend
@@ -24,3 +26,4 @@ services:
       - /app/.next
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000

@@ -4,14 +4,11 @@
  * frontend/components/views/composition-view.tsx
  *
  * Piano-roll renderer with real-time note highlighting.
+ * Progress scrubber lives in the workbench toolbar (bach-workbench.tsx).
  *
- * Design language:
- *   - Horizontal bars = notes  (x = time, width = duration, y = pitch)
- *   - Active notes under the playhead → bright purple glow
- *   - Past notes → dimmed
- *   - Future notes → base purple opacity
- *   - Playhead → dashed vertical line with triangle marker
- *   - Pure canvas 2D — no external lib needed
+ * Rendering uses requestAnimationFrame-driven redraw so the playhead
+ * stays smooth even at 60fps. Beat tracking uses transport.seconds
+ * (monotonic) converted to quarter beats — no BBT string parsing.
  */
 
 import { useEffect, useRef, useCallback, useState } from "react"
@@ -43,7 +40,6 @@ function notePitches(note: VexFlowNote): number[] {
 }
 
 function parseBeat(s: string): number {
-  // Handles: "1/4", "0.25", "2.0", "3"
   if (s.includes("/")) {
     const [n, d] = s.split("/").map(Number)
     return d ? n / d : n
@@ -85,7 +81,6 @@ function renderPianoRoll(
   const W = canvas.width
   const H = canvas.height
 
-  // Pitch range
   const midis   = flatNotes.map((n) => n.midi)
   const minMidi = Math.max(21,  Math.min(...midis, 60) - 3)
   const maxMidi = Math.min(108, Math.max(...midis, 72) + 3)
@@ -94,11 +89,7 @@ function renderPianoRoll(
   const totalBeats      = Math.max(payload.total_beats, 1)
   const beatsPerMeasure = parseInt(payload.time_signature?.split("/")[0] ?? "4")
 
-  // Layout
-  const LABEL_W   = 34
-  const PAD_R     = 12
-  const PAD_T     = 8
-  const PAD_B     = 22
+  const LABEL_W = 34, PAD_R = 12, PAD_T = 8, PAD_B = 22
   const rollW = W - LABEL_W - PAD_R
   const rollH = H - PAD_T - PAD_B
   const beatW  = rollW / totalBeats
@@ -107,21 +98,19 @@ function renderPianoRoll(
   const bx = (beat: number) => LABEL_W + beat * beatW
   const py = (midi: number) => PAD_T + (maxMidi - midi) * pitchH
 
-  // Background
   ctx.fillStyle = "#0e0d14"
   ctx.fillRect(0, 0, W, H)
 
-  // Pitch rows — shade black keys
+  // Pitch rows
   for (let m = minMidi; m <= maxMidi; m++) {
     const note = m % 12
     if ([1,3,6,8,10].includes(note)) {
       ctx.fillStyle = "rgba(0,0,0,0.22)"
       ctx.fillRect(LABEL_W, py(m), rollW, pitchH)
     }
-    // C line
     if (note === 0) {
       ctx.strokeStyle = "rgba(168,130,255,0.20)"
-      ctx.lineWidth   = 0.8
+      ctx.lineWidth = 0.8
       ctx.beginPath(); ctx.moveTo(LABEL_W, py(m)); ctx.lineTo(W - PAD_R, py(m)); ctx.stroke()
     }
   }
@@ -129,16 +118,13 @@ function renderPianoRoll(
   // Measure lines + numbers
   const totalMeasures = Math.ceil(totalBeats / beatsPerMeasure)
   const labelEvery    = Math.max(1, Math.floor(totalMeasures / 16))
-
-  ctx.font      = "9px monospace"
-  ctx.textAlign = "center"
+  ctx.font = "9px monospace"; ctx.textAlign = "center"
 
   for (let m = 0; m <= totalMeasures; m++) {
     const x = bx(m * beatsPerMeasure)
     ctx.strokeStyle = m === 0 ? "rgba(168,130,255,0.35)" : "rgba(168,130,255,0.14)"
     ctx.lineWidth   = m === 0 ? 1.5 : 0.5
     ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, H - PAD_B); ctx.stroke()
-
     if (m < totalMeasures && m % labelEvery === 0) {
       ctx.fillStyle = "rgba(168,130,255,0.4)"
       ctx.fillText(String(m + 1), x + (beatW * beatsPerMeasure) / 2, H - 5)
@@ -146,8 +132,7 @@ function renderPianoRoll(
   }
 
   // Beat sub-lines
-  ctx.strokeStyle = "rgba(168,130,255,0.06)"
-  ctx.lineWidth   = 0.3
+  ctx.strokeStyle = "rgba(168,130,255,0.06)"; ctx.lineWidth = 0.3
   for (let b = 0; b <= totalBeats; b++) {
     if (b % beatsPerMeasure !== 0) {
       const x = bx(b)
@@ -156,79 +141,54 @@ function renderPianoRoll(
   }
 
   // Notes
-  const N_PAD   = 1.5
-  const MIN_W   = 3
-  const RADIUS  = 2
-
+  const N_PAD = 1.5, MIN_W = 3, RADIUS = 2
   for (const note of flatNotes) {
     if (note.midi < minMidi || note.midi > maxMidi) continue
-
     const x = bx(note.startBeat)
     const y = py(note.midi) + N_PAD
     const w = Math.max(MIN_W, (note.endBeat - note.startBeat) * beatW - N_PAD * 2)
     const h = Math.max(3, pitchH - N_PAD * 2)
-
     const isActive = cursorBeat >= note.startBeat && cursorBeat < note.endBeat
     const isPast   = cursorBeat >= note.endBeat
 
-    ctx.beginPath()
-    ctx.roundRect(x, y, w, h, RADIUS)
-
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, RADIUS)
     if (isActive) {
-      // Outer glow
-      ctx.shadowColor = "rgba(200,160,255,0.6)"
-      ctx.shadowBlur  = 12
-      ctx.fillStyle   = "rgba(185,145,255,1.0)"
-      ctx.fill()
+      ctx.shadowColor = "rgba(200,160,255,0.6)"; ctx.shadowBlur = 12
+      ctx.fillStyle   = "rgba(185,145,255,1.0)"; ctx.fill()
       ctx.shadowBlur  = 0
-      // Bright highlight stripe
-      ctx.fillStyle = "rgba(255,248,255,0.45)"
+      ctx.fillStyle   = "rgba(255,248,255,0.45)"
       ctx.fillRect(x + 1, y + 1, Math.min(w - 2, 8), Math.max(1, h * 0.4))
     } else if (isPast) {
-      ctx.fillStyle = "rgba(80,55,140,0.32)"
-      ctx.fill()
+      ctx.fillStyle = "rgba(80,55,140,0.32)"; ctx.fill()
     } else {
-      ctx.fillStyle = "rgba(120,88,198,0.58)"
-      ctx.fill()
+      ctx.fillStyle = "rgba(120,88,198,0.58)"; ctx.fill()
     }
   }
 
-  // Piano key labels
-  ctx.font      = "9px monospace"
-  ctx.textAlign = "right"
-  const noteNames = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
-
+  // Pitch labels
+  ctx.font = "9px monospace"; ctx.textAlign = "right"
   for (let m = minMidi; m <= maxMidi; m++) {
-    const note = m % 12
-    if (note !== 0) continue   // only label C notes
+    if (m % 12 !== 0) continue
     const octave = Math.floor(m / 12) - 1
-    const yLabel = py(m) + pitchH / 2 + 3
     const hasActive = flatNotes.some(
       (n) => n.midi === m && cursorBeat >= n.startBeat && cursorBeat < n.endBeat
     )
     ctx.fillStyle = hasActive ? "rgba(220,200,255,0.95)" : "rgba(168,130,255,0.45)"
-    ctx.fillText(`C${octave}`, LABEL_W - 4, yLabel)
+    ctx.fillText(`C${octave}`, LABEL_W - 4, py(m) + pitchH / 2 + 3)
   }
 
   // Playhead
   const headX = bx(cursorBeat)
   if (headX >= LABEL_W && headX <= W - PAD_R) {
-    ctx.shadowColor = "rgba(220,180,255,0.7)"
-    ctx.shadowBlur  = 8
-    ctx.strokeStyle = "rgba(220,180,255,0.9)"
-    ctx.lineWidth   = 1.5
+    ctx.shadowColor = "rgba(220,180,255,0.7)"; ctx.shadowBlur = 8
+    ctx.strokeStyle = "rgba(220,180,255,0.9)"; ctx.lineWidth = 1.5
     ctx.setLineDash([4, 3])
     ctx.beginPath(); ctx.moveTo(headX, PAD_T); ctx.lineTo(headX, H - PAD_B); ctx.stroke()
-    ctx.setLineDash([])
-    ctx.shadowBlur = 0
-
+    ctx.setLineDash([]); ctx.shadowBlur = 0
     ctx.fillStyle = "rgba(220,180,255,0.9)"
     ctx.beginPath()
-    ctx.moveTo(headX - 5, PAD_T)
-    ctx.lineTo(headX + 5, PAD_T)
-    ctx.lineTo(headX,     PAD_T + 9)
-    ctx.closePath()
-    ctx.fill()
+    ctx.moveTo(headX - 5, PAD_T); ctx.lineTo(headX + 5, PAD_T); ctx.lineTo(headX, PAD_T + 9)
+    ctx.closePath(); ctx.fill()
   }
 }
 
@@ -248,7 +208,7 @@ function EmptyScore() {
       </svg>
       <p className="text-sm font-serif italic text-center max-w-xs leading-relaxed">
         Select a piece from the <strong>Library</strong> and click{" "}
-        <strong>Load into Workbench</strong> to see the piano roll
+        <strong>Load into Workbench</strong>
       </p>
     </div>
   )
@@ -263,13 +223,12 @@ export function CompositionView() {
   const flatRef      = useRef<FlatNote[]>([])
   const [refreshing, setRefreshing] = useState(false)
 
-  // Force re-parse from backend (busts the cache)
   const handleRefresh = useCallback(async () => {
     if (!activeScore) return
     setRefreshing(true)
     setNotationData(null)
     try {
-      const notation = await api.corpus.notation(activeScore.id, true) // ?refresh=true
+      const notation = await api.corpus.notation(activeScore.id, true)
       setNotationData(notation)
     } catch (err) {
       console.error("[CompositionView] refresh failed:", err)
@@ -278,7 +237,6 @@ export function CompositionView() {
     }
   }, [activeScore, setNotationData])
 
-  // Rebuild flat notes only when notation changes
   useEffect(() => {
     flatRef.current = notationData ? buildFlatNotes(notationData) : []
   }, [notationData])
@@ -289,8 +247,6 @@ export function CompositionView() {
     if (!canvas || !notationData) return
 
     const rect = container!.getBoundingClientRect()
-
-    // Container not yet laid out — retry on next frame
     if (rect.width < 10 || rect.height < 10) {
       requestAnimationFrame(redraw)
       return
@@ -299,22 +255,17 @@ export function CompositionView() {
     const w = Math.floor(rect.width)
     const h = Math.floor(rect.height)
     if (canvas.width !== w || canvas.height !== h) {
-      canvas.width  = w
-      canvas.height = h
+      canvas.width = w; canvas.height = h
     }
 
     if (flatRef.current.length === 0) {
-      // Draw a "no notes" message directly on canvas
       const ctx = canvas.getContext("2d")!
-      ctx.fillStyle = "#0e0d14"
-      ctx.fillRect(0, 0, w, h)
-      ctx.fillStyle = "rgba(168,130,255,0.4)"
-      ctx.font = "14px serif"
+      ctx.fillStyle = "#0e0d14"; ctx.fillRect(0, 0, w, h)
+      ctx.fillStyle = "rgba(168,130,255,0.4)"; ctx.font = "14px serif"
       ctx.textAlign = "center"
       ctx.fillText("No note data available for this file", w / 2, h / 2 - 10)
-      ctx.font = "11px monospace"
-      ctx.fillStyle = "rgba(168,130,255,0.25)"
-      ctx.fillText("The MIDI file may use an unsupported format", w / 2, h / 2 + 14)
+      ctx.font = "11px monospace"; ctx.fillStyle = "rgba(168,130,255,0.25)"
+      ctx.fillText("Try clicking 'Refresh score' below", w / 2, h / 2 + 14)
       return
     }
 
@@ -323,7 +274,6 @@ export function CompositionView() {
 
   useEffect(() => { redraw() }, [redraw])
 
-  // Resize observer
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -349,15 +299,13 @@ export function CompositionView() {
 
   const title = activeScore.movement_name?.trim()
     || (activeScore.bwv ? `BWV ${activeScore.bwv}` : null)
-    || activeScore.collection?.replace(/_/g, " ")
-    || "Score"
+    || activeScore.collection?.replace(/_/g, " ") || "Score"
 
   const subtitle = [activeScore.key_signature, activeScore.time_signature]
     .filter(Boolean).join(" · ")
 
   return (
     <div className="bg-card rounded-xl p-6 min-h-full border border-border flex flex-col gap-4">
-      {/* Title */}
       <div className="text-center">
         <h2 className="font-serif text-2xl italic text-foreground/90">{title}</h2>
         {subtitle && (
@@ -367,7 +315,6 @@ export function CompositionView() {
         )}
       </div>
 
-      {/* Legend */}
       <div className="flex items-center justify-center gap-6 text-xs text-muted-foreground font-mono select-none">
         <span className="flex items-center gap-2">
           <span className="inline-block w-3 h-3 rounded-sm" style={{background:"rgba(80,55,140,0.45)"}} />
@@ -384,20 +331,14 @@ export function CompositionView() {
         </span>
       </div>
 
-      {/* Piano roll */}
-      <div
-        ref={containerRef}
-        className="flex-1 rounded-lg overflow-hidden"
+      <div ref={containerRef} className="flex-1 rounded-lg overflow-hidden"
         style={{
-          minHeight: 340,
-          background: "#0e0d14",
+          minHeight: 340, background: "#0e0d14",
           boxShadow: "inset 0 0 40px rgba(0,0,0,0.6), 0 0 20px rgba(168,130,255,0.08)",
-        }}
-      >
+        }}>
         <canvas ref={canvasRef} className="block w-full h-full" />
       </div>
 
-      {/* Footer */}
       <div className="flex justify-between items-center text-sm text-muted-foreground font-serif italic">
         <span>Bach Propagation Engine v2.0</span>
         <div className="flex items-center gap-3">
@@ -406,14 +347,10 @@ export function CompositionView() {
               ? `${notationData.measures.length} measures · ${notationData.key_signature}`
               : notationData.key_signature}
           </span>
-          <Button
-            variant="ghost"
-            size="sm"
+          <Button variant="ghost" size="sm"
             className="h-7 px-2 text-xs text-muted-foreground hover:text-primary"
-            onClick={handleRefresh}
-            disabled={refreshing}
-            title="Force re-parse notation from MIDI"
-          >
+            onClick={handleRefresh} disabled={refreshing}
+            title="Force re-parse notation from MIDI">
             <RefreshCw className={`w-3 h-3 mr-1 ${refreshing ? "animate-spin" : ""}`} />
             {refreshing ? "Re-parsing…" : "Refresh score"}
           </Button>

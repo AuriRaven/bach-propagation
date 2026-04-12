@@ -7,11 +7,9 @@
 
 import type { CorpusFile, VexFlowPayload } from "./app-state"
 
-// Support both env var names for compatibility with docker-compose
+// Support both env var names for docker-compose compatibility
 const BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ??
-  process.env.NEXT_PUBLIC_API_URL ??
-  "http://localhost:8000"
+  process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || "http://localhost:8000"
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -49,7 +47,7 @@ async function fetcher<T>(
   }
 }
 
-// ─── Response types ───────────────────────────────────────────────────────────
+// ─── Corpus types ─────────────────────────────────────────────────────────────
 
 export interface PaginatedResponse<T> {
   items: T[]
@@ -73,6 +71,41 @@ export interface CorpusStats {
   by_key_mode: Record<string, number>
 }
 
+// ─── Analysis types ───────────────────────────────────────────────────────────
+
+export interface KeyModeCount    { mode: string; count: number }
+export interface CollectionCount { collection: string; count: number }
+export interface FormTagCount    { form_tag: string; count: number }
+export interface VoiceCount      { num_voices: number; count: number }
+export interface Bucket          { label: string; min_s: number; max_s: number; count: number }
+
+export interface CorpusAnalytics {
+  total: number
+  by_key_mode: KeyModeCount[]
+  by_collection: CollectionCount[]
+  by_form_tag: FormTagCount[]
+  by_voice_count: VoiceCount[]
+  duration_histogram: Bucket[]
+  measures_histogram: Bucket[]
+}
+
+export interface RomanNumeralFreq  { numeral: string; degree: number; count: number; percentage: number }
+export interface ChordQualityFreq  { quality: string; count: number; percentage: number }
+export interface HarmonicFuncFreq  { function: string; count: number; percentage: number }
+
+export interface ScoreHarmonicAnalysis {
+  corpus_id: string
+  global_key_tonic: number
+  global_key_mode: string
+  global_key_confidence: number
+  total_chords: number
+  roman_numerals: RomanNumeralFreq[]
+  chord_qualities: ChordQualityFreq[]
+  harmonic_functions: HarmonicFuncFreq[]
+  secondary_dominant_count: number
+  borrowed_chord_count: number
+}
+
 // ─── SSE types ────────────────────────────────────────────────────────────────
 
 export type SseEvent =
@@ -81,21 +114,9 @@ export type SseEvent =
   | { type: "tool_use"; tool: "fetchAnalysis"; result: { filter_collection?: string; analysis_type?: string } }
   | { type: "done" }
 
-export interface ChatMessage {
-  role: "user" | "assistant"
-  content: string
-}
+export interface ChatMessage { role: "user" | "assistant"; content: string }
+export interface AppContext   { active_nav?: string; active_score_id?: string; active_score_name?: string }
 
-export interface AppContext {
-  active_nav?: string
-  active_score_id?: string
-  active_score_name?: string
-}
-
-/**
- * Streams Server-Sent Events from POST /api/ai/chat.
- * Yields typed SseEvent objects — caller owns side-effects.
- */
 export async function* streamAiChat(
   messages: ChatMessage[],
   context: AppContext = {},
@@ -107,7 +128,7 @@ export async function* streamAiChat(
   })
   if (!res.ok || !res.body) throw new ApiError(res.status, await res.text())
 
-  const reader = res.body.getReader()
+  const reader  = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
 
@@ -120,7 +141,7 @@ export async function* streamAiChat(
     for (const line of lines) {
       const trimmed = line.replace(/^data: /, "").trim()
       if (!trimmed) continue
-      try { yield JSON.parse(trimmed) as SseEvent } catch { /* skip malformed */ }
+      try { yield JSON.parse(trimmed) as SseEvent } catch { /* skip */ }
     }
   }
 }
@@ -132,10 +153,10 @@ export const api = {
     list(filters: CorpusListFilters = {}): Promise<PaginatedResponse<CorpusFile>> {
       const p = new URLSearchParams()
       if (filters.collection) p.set("collection", filters.collection)
-      if (filters.key_mode)   p.set("key_mode", filters.key_mode)
-      if (filters.form_tag)   p.set("form_tag", filters.form_tag)
-      if (filters.page)       p.set("page", String(filters.page))
-      if (filters.page_size)  p.set("page_size", String(filters.page_size))
+      if (filters.key_mode)   p.set("key_mode",   filters.key_mode)
+      if (filters.form_tag)   p.set("form_tag",   filters.form_tag)
+      if (filters.page)       p.set("page",       String(filters.page))
+      if (filters.page_size)  p.set("page_size",  String(filters.page_size))
       const qs = p.toString() ? `?${p}` : ""
       return fetcher<PaginatedResponse<CorpusFile>>(`/api/corpus${qs}`)
     },
@@ -145,7 +166,6 @@ export const api = {
     },
 
     notation(id: string, refresh = false): Promise<VexFlowPayload> {
-      // music21 parsing takes 10–45s on first load; subsequent calls hit cache
       const qs = refresh ? "?refresh=true" : ""
       return fetcher<VexFlowPayload>(`/api/corpus/${id}/notation${qs}`, undefined, 60_000)
     },
@@ -157,6 +177,23 @@ export const api = {
 
     stats(): Promise<CorpusStats> {
       return fetcher<CorpusStats>("/api/corpus/stats")
+    },
+  },
+
+  analysis: {
+    /** Corpus-level aggregate analytics — fast, no MIDI parsing */
+    corpus(): Promise<CorpusAnalytics> {
+      return fetcher<CorpusAnalytics>("/api/analysis/corpus", undefined, 15_000)
+    },
+
+    /** Per-score harmonic analysis — slow first run (~30s), cached after */
+    score(id: string, refresh = false): Promise<ScoreHarmonicAnalysis> {
+      const qs = refresh ? "?refresh=true" : ""
+      return fetcher<ScoreHarmonicAnalysis>(
+        `/api/analysis/score/${id}${qs}`,
+        undefined,
+        90_000,   // 90s — chord classification on large scores can be slow
+      )
     },
   },
 }

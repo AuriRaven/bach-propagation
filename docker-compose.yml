@@ -1,16 +1,18 @@
 services:
   backend:
-    build: 
+    build:
       context: ./backend
     container_name: bach-backend
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app
-      - /app/.venv
+      - ./backend/src:/app/src
+      - ./backend/routers:/app/routers
+      - ./backend/main.py:/app/main.py
+      - ./backend/scripts:/app/scripts
     environment:
       - ENV=development
-      - PATH=/app/.venv/bin:$PATH
+      - PYTHONUNBUFFERED=1
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -21,9 +23,14 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
+      - ./frontend/app:/app/app
+      - ./frontend/components:/app/components
+      - ./frontend/hooks:/app/hooks
+      - ./frontend/lib:/app/lib
+      - ./frontend/styles:/app/styles
+      - ./frontend/public:/app/public
+      - ./frontend/next.config.mjs:/app/next.config.mjs
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
       - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+    depends_on:
+      - backend

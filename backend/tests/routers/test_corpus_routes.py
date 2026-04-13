@@ -145,10 +145,11 @@ class TestGetNotation:
     def test_returns_cached_vexflow(self):
         """If raw_metadata already has vexflow key, no music21 parse needed."""
         cached_payload = {
-            "measures": [],
+            "measures": [{"index": 0, "start_beat": 0.0, 
+                        "end_beat": 4.0, "notes": []}],
             "time_signature": "4/4",
-            "key_signature": "C major",
-            "total_beats": 0.0,
+            "key_signature": "C major", 
+            "total_beats": 4.0,
         }
         row_with_cache = {**SAMPLE_ROW, "raw_metadata": {"vexflow": cached_payload}}
 

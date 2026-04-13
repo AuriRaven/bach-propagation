@@ -219,7 +219,7 @@ def evaluate_generator(
         seq = generator.generate(
             key_mode=key_mode,
             n_tokens=64,
-            temperature=0.9,
+            temperature=0.7,   # was 0.9 — lower = more deterministic, more tonal
             top_k=10,
             seed=i,
         )

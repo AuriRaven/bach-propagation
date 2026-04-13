@@ -27,7 +27,7 @@ import torch
 import torch.nn.functional as F
 
 from src.corpus.transition_matrix import TransitionMatrix
-from src.data.harmonic_encoder import HarmonicVocabulary
+from src.data.harmonic_encoder import HarmonicVocabulary, PAD, BOS, EOS, UNK, CAD_NONE
 from src.grammar.rules import BaroqueGrammar
 from src.grammar.validator import GrammarReport, GrammarValidator
 from src.models.music_transformer import MusicTransformer
@@ -101,7 +101,7 @@ class MusicGenerator:
 
     # Logit boost applied to dominant-function chords when a cadence
     # is required at the current position.
-    _CADENCE_BOOST = 2.0
+    _CADENCE_BOOST = 4.0
 
     def __init__(
         self,
@@ -161,7 +161,7 @@ class MusicGenerator:
         resolved = _resolve_device(device)
         model, _ = MusicTransformer.load_checkpoint(checkpoint_path, device=str(resolved))
 
-        vocab  = HarmonicVocabulary.from_json(vocab_path)
+        vocab  = HarmonicVocabulary.load(vocab_path)
         matrix = TransitionMatrix.from_json(transition_matrix_path)
 
         return cls(
@@ -209,9 +209,9 @@ class MusicGenerator:
         if seed is not None:
             torch.manual_seed(seed)
 
-        bos  = self._vocab.specials["BOS"]
-        pad  = self._vocab.specials["PAD"]
-        none = self._vocab.specials.get("CAD_NONE", 4)
+        bos  = BOS
+        pad  = PAD  # noqa: F841
+        none = CAD_NONE
 
         # Initialise token buffers
         if prompt_tokens is not None:
@@ -267,7 +267,7 @@ class MusicGenerator:
                 # ── Update buffers ────────────────────────────────────────
                 chord_buf.append(next_id)
                 rn_label = self._chord_to_rn.get(next_id, prev_rn)
-                rn_id    = self._vocab.rn_to_id.get(rn_label, self._vocab.specials["UNK"])
+                rn_id    = self._vocab.rn_id(rn_label)
                 rn_buf.append(rn_id)
                 cadence_buf.append(none)     # cadence stream: none during body
 
@@ -456,7 +456,7 @@ class MusicGenerator:
         transition_matrix in minor if parsing fails.
         """
         chord_to_rn: dict[int, str] = {}
-        specials = set(self._vocab.specials.values())
+        specials = {PAD, BOS, EOS, UNK, CAD_NONE}
 
         # Degree lookup: semitone interval from C → diatonic degree (minor)
         _semitone_to_degree_minor = {

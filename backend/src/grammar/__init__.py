@@ -5,9 +5,17 @@ from .rules import (
     FORBIDDEN_PROGRESSIONS,
     BaroqueGrammar,
 )
+from .validator import (
+    GrammarReport,
+    GrammarValidator,
+    GrammarViolation,
+)
 
 __all__ = [
     "BaroqueGrammar",
-    "FORBIDDEN_PROGRESSIONS",
     "DISCOURAGED_PROGRESSIONS",
+    "FORBIDDEN_PROGRESSIONS",
+    "GrammarReport",
+    "GrammarValidator",
+    "GrammarViolation",
 ]

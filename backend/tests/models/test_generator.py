@@ -25,10 +25,13 @@ import torch.nn as nn
 # ---------------------------------------------------------------------------
 
 class _FakeVocab:
-    """Minimal HarmonicVocabulary stub."""
+    """Minimal HarmonicVocabulary stub — mirrors real HarmonicVocabulary API."""
+
+    @classmethod
+    def load(cls, path: str) -> "_FakeVocab":
+        return cls()
 
     def __init__(self):
-        self.specials = {"PAD": 0, "BOS": 1, "EOS": 2, "UNK": 3, "CAD_NONE": 4}
         # 10 real chord labels (IDs 5-14)
         _labels = [
             "C:major", "G:major", "F:major", "A:minor",
@@ -37,17 +40,31 @@ class _FakeVocab:
         ]
         self.chord_to_id = {lbl: i + 5 for i, lbl in enumerate(_labels)}
         self._id_to_chord = {v: k for k, v in self.chord_to_id.items()}
-        self.rn_to_id = {
+        self._rn_to_id = {
             "i": 5, "iv": 6, "V": 7, "V7": 8, "VI": 9,
             "II": 10, "III": 11, "VII": 12,
         }
+        self._id_to_rn = {v: k for k, v in self._rn_to_id.items()}
+        # Keep rn_to_id as dict attr for direct access in tests
+        self.rn_to_id = self._rn_to_id
+
+    def chord_id(self, label: str) -> int:
+        return self.chord_to_id.get(label, 3)  # UNK=3
+
+    def rn_id(self, label: str) -> int:
+        return self._rn_to_id.get(label, 3)    # UNK=3
+
+    def cadence_id(self, label: str) -> int:
+        return 4                                # CAD_NONE=4
 
     def chord_label(self, idx: int) -> str:
         return self._id_to_chord.get(idx, "C:major")
 
-    @classmethod
-    def from_json(cls, path: str) -> "_FakeVocab":
-        return cls()
+    def rn_label(self, idx: int) -> str:
+        return self._id_to_rn.get(idx, "i")
+
+    def cadence_label(self, idx: int) -> str:
+        return "none"
 
 
 class _FakeMatrix:

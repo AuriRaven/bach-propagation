@@ -12,6 +12,7 @@ from fractions import Fraction
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from src.core.data_structures import Chord, MusicalEvent, Score
+from src.harmonic.nct_classifier import NCTClassificationConfig, NCTClassifier
 from src.temporal.windower import AnalysisWindow, WindowType, Windower
 
 # ---------------------------------------------------------------------------
@@ -58,10 +59,24 @@ class ChordClassificationConfig:
         beat_weight_exponent: Exponent applied to event.beat_strength before
                               weighting. 1.0 = linear (default), 2.0 = quadratic
                               emphasis on metrically strong notes.
+        include_nct_filter: When True, window events are pre-filtered through
+                              ``NCTClassifier.filter_events_for_profile`` to
+                              drop obvious passing/neighbour tones before the
+                              pitch-class profile is built. The filter is
+                              conservative: it only removes events that are
+                              metrically weak *and* stepwise on both sides
+                              next to a metrically strong neighbour, so the
+                              chord root/quality decision is biased toward
+                              structural pitches. Default True.
+        nct_config: Tuning parameters forwarded to the NCT pre-filter. A
+                              default-constructed ``NCTClassificationConfig``
+                              is used when ``None``.
     """
     min_confidence: float = 0.3
     include_seventh_chords: bool = True
     beat_weight_exponent: float = 1.0
+    include_nct_filter: bool = True
+    nct_config: Optional[NCTClassificationConfig] = None
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +90,11 @@ class ChordClassifier:
     All methods are stateless — instantiate once and reuse freely.
     """
 
+    def __init__(self) -> None:
+        # Stateless classifier; kept as an instance attribute to avoid a new
+        # object allocation on every window.
+        self._nct_classifier = NCTClassifier()
+
     def classify_window(
         self,
         window: AnalysisWindow,
@@ -86,13 +106,24 @@ class ChordClassifier:
         Returns None if the window is empty, rest-only, or below min_confidence.
 
         Algorithm:
-          1. Build beat-strength-weighted pitch-class profile.
-          2. Score every candidate (12 roots × active qualities).
-          3. Normalise best_score against profile total.
-          4. If below threshold, return None.
-          5. Determine bass and inversion; return Chord.
+          1. Optionally pre-filter likely NCTs via ``NCTClassifier``.
+          2. Build beat-strength-weighted pitch-class profile from the
+             (possibly filtered) events.
+          3. Score every candidate (12 roots × active qualities).
+          4. Normalise best_score against profile total.
+          5. If below threshold, return None.
+          6. Determine bass and inversion; return Chord.
         """
-        profile = self._build_pitch_class_profile(window, config)
+        if config.include_nct_filter:
+            filtered_events = self._nct_classifier.filter_events_for_profile(
+                window.events, config.nct_config
+            )
+        else:
+            filtered_events = list(window.events)
+
+        profile = self._build_pitch_class_profile_from_events(
+            filtered_events, config
+        )
         total = sum(profile)
         if total < _EPSILON:
             return None
@@ -128,9 +159,15 @@ class ChordClassifier:
             return None
 
         intervals = _CHORD_TEMPLATES[best_quality]
-        bass_pc, inversion = self._get_inversion(window.events, best_root, intervals)
+        # Use the filtered event list for inversion so that obvious passing
+        # tones in the bass (e.g. a weak-beat step between two downbeats)
+        # don't masquerade as the structural bass note.
+        bass_pc, inversion = self._get_inversion(filtered_events, best_root, intervals)
 
-        # Collect pitch classes that are present in the window
+        # ``present_pcs`` reports every pitch class heard in the window — we
+        # intentionally use the unfiltered event list so that the downstream
+        # consumers see the full harmonic content, not just the structural
+        # subset that chord identification was based on.
         present_pcs = frozenset(
             ev.pitch % 12
             for ev in window.events
@@ -181,6 +218,22 @@ class ChordClassifier:
         config: ChordClassificationConfig,
     ) -> List[float]:
         """
+        Aggregate beat-strength-weighted pitch-class contributions for a window.
+
+        Thin wrapper around :meth:`_build_pitch_class_profile_from_events` that
+        preserves the original call signature for existing callers and tests.
+
+        Returns:
+            List[float] of length 12. All zeros for rest-only windows.
+        """
+        return self._build_pitch_class_profile_from_events(window.events, config)
+
+    def _build_pitch_class_profile_from_events(
+        self,
+        events: List[MusicalEvent],
+        config: ChordClassificationConfig,
+    ) -> List[float]:
+        """
         Aggregate beat-strength-weighted pitch-class contributions.
 
         For each non-rest event:
@@ -188,11 +241,12 @@ class ChordClassifier:
             profile[pitch % 12] += weight
 
         Returns:
-            List[float] of length 12. All zeros for rest-only windows.
+            List[float] of length 12. All zeros when no pitched events are
+            supplied.
         """
         profile = [0.0] * 12
         exp = config.beat_weight_exponent
-        for ev in window.events:
+        for ev in events:
             if ev.is_rest or ev.pitch is None:
                 continue
             weight = (ev.beat_strength ** exp) * float(ev.duration)

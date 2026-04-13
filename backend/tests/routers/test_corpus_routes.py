@@ -145,21 +145,20 @@ class TestGetNotation:
     def test_returns_cached_vexflow(self):
         """If raw_metadata already has vexflow key, no music21 parse needed."""
         cached_payload = {
-            "measures": [{"index": 0, "start_beat": 0.0, 
+            "measures": [{"index": 0, "start_beat": 0.0,
                         "end_beat": 4.0, "notes": []}],
             "time_signature": "4/4",
-            "key_signature": "C major", 
+            "key_signature": "C major",
             "total_beats": 4.0,
         }
         row_with_cache = {**SAMPLE_ROW, "raw_metadata": {"vexflow": cached_payload}}
 
         app = FastAPI()
         app.include_router(corpus_router, prefix="/api")
+
+        # Use make_mock_supabase with single_row — this correctly wires
+        # .single().execute().data so get_notation reads the cached vexflow.
         mock_sb = make_mock_supabase(single_row=row_with_cache)
-        # corpus_files lookup uses a separate chain
-        cf_chain = MagicMock()
-        cf_chain.execute.return_value = MagicMock(data=row_with_cache)
-        mock_sb.from_.return_value.select.return_value.eq.return_value.single.return_value = cf_chain
         app.dependency_overrides[get_supabase] = lambda: mock_sb
 
         with TestClient(app) as c:

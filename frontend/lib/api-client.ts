@@ -106,6 +106,26 @@ export interface ScoreHarmonicAnalysis {
   borrowed_chord_count: number
 }
 
+// ─── Generation types ─────────────────────────────────────────────────────────
+
+export interface GenerationRequest {
+  key_mode?: "minor" | "major"
+  n_tokens?: number          // 16–512
+  temperature?: number       // 0.1–2.0
+  top_k?: number             // 1–50
+  prompt_bwv?: string | null
+}
+
+export interface GenerationResponse {
+  chord_tokens: number[]
+  rn_sequence: string[]
+  tonal_score: number
+  is_valid: boolean
+  forbidden_rate: number
+  musicxml_b64: string
+  generation_time_ms: number
+}
+
 // ─── SSE types ────────────────────────────────────────────────────────────────
 
 export type SseEvent =
@@ -193,6 +213,18 @@ export const api = {
         `/api/analysis/score/${id}${qs}`,
         undefined,
         90_000,   // 90s — chord classification on large scores can be slow
+      )
+    },
+  },
+
+  generation: {
+    /** Generate chord sequence via the Music Transformer model.
+     *  Returns 503 if the model checkpoint is not loaded. */
+    generate(req: GenerationRequest): Promise<GenerationResponse> {
+      return fetcher<GenerationResponse>(
+        "/api/generate",
+        { method: "POST", body: JSON.stringify(req) },
+        120_000,  // 120s — generation on CPU can be slow
       )
     },
   },

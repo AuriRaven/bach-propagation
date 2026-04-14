@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import {
   Play, Pause, Square, Undo2, Redo2,
   Library, FilePlus, BarChart3, Settings,
@@ -23,10 +23,34 @@ import { ChatMessage }     from "@/components/chat-message"
 
 import { useAppState }   from "@/lib/app-state"
 import { useMidiPlayer } from "@/hooks/use-midi-player"
-import { useAiChat }     from "@/hooks/use-ai-chat"
+import { useAiChat, type UseAiChatReturn } from "@/hooks/use-ai-chat"
+import { useGeneration } from "@/hooks/use-generation"
+import type { GenerationResponse } from "@/lib/api-client"
 
 type ViewType    = "Library" | "New Composition" | "Analysis" | "Settings"
 type PanelTab    = "copilot" | "controls"
+
+// ─── Slider → API mappers ─────────────────────────────────────────────────────
+
+/** Complexity slider (0–100) → n_tokens (16–512) */
+function complexityToTokens(v: number): number {
+  return Math.round(16 + (v / 100) * (512 - 16))
+}
+
+/** Ornamentation slider (0–100) → temperature (0.1–2.0) */
+function ornamentationToTemp(v: number): number {
+  return Math.round((0.1 + (v / 100) * (2.0 - 0.1)) * 100) / 100
+}
+
+/** Counterpoint slider (0–100) → top_k (1–50) */
+function counterpointToTopK(v: number): number {
+  return Math.round(1 + (v / 100) * (50 - 1))
+}
+
+/** Extract "major" | "minor" from select value like "d-minor" */
+function keySelectToMode(v: string): "major" | "minor" {
+  return v.endsWith("-major") ? "major" : "minor"
+}
 
 // ─── Loading overlay ──────────────────────────────────────────────────────────
 
@@ -79,8 +103,8 @@ function ProgressScrubber({
 
 // ─── Copilot panel ────────────────────────────────────────────────────────────
 
-function CopilotPanel({ isThinking }: { isThinking: boolean }) {
-  const { messages, send, clear } = useAiChat()
+function CopilotPanel({ chat }: { chat: UseAiChatReturn }) {
+  const { messages, isThinking, send, clear } = chat
   const [input,   setInput]   = useState("")
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -166,20 +190,38 @@ function CopilotPanel({ isThinking }: { isThinking: boolean }) {
   )
 }
 
-// ─── Controls panel (existing sliders) ───────────────────────────────────────
+// ─── Controls panel ───────────────────────────────────────────────────────────
 
-function ControlsPanel({ activeScore }: { activeScore: ReturnType<typeof useAppState>["activeScore"] }) {
-  const [complexity,    setComplexity]    = useState([75])
-  const [counterpoint,  setCounterpoint]  = useState([60])
-  const [ornamentation, setOrnamentation] = useState([42])
+interface ControlsPanelProps {
+  activeScore:    ReturnType<typeof useAppState>["activeScore"]
+  // Controlled slider/select state
+  keySelect:      string;       onKeyChange:          (v: string) => void
+  complexity:     number[];     onComplexityChange:   (v: number[]) => void
+  counterpoint:   number[];     onCounterpointChange: (v: number[]) => void
+  ornamentation:  number[];     onOrnamentationChange:(v: number[]) => void
+  // Generation
+  isGenerating:   boolean
+  lastResult:     GenerationResponse | null
+  genError:       string | null
+  onRegenerate:   () => void
+}
 
+function ControlsPanel({
+  activeScore,
+  keySelect, onKeyChange,
+  complexity, onComplexityChange,
+  counterpoint, onCounterpointChange,
+  ornamentation, onOrnamentationChange,
+  isGenerating, lastResult, genError,
+  onRegenerate,
+}: ControlsPanelProps) {
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
       {/* Key & Time */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         <div>
           <label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Key</label>
-          <Select defaultValue="d-minor">
+          <Select value={keySelect} onValueChange={onKeyChange}>
             <SelectTrigger className="bg-card border-border"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="c-major">C Major</SelectItem>
@@ -205,21 +247,63 @@ function ControlsPanel({ activeScore }: { activeScore: ReturnType<typeof useAppS
 
       {/* Sliders */}
       <div className="space-y-6 mb-6">
-        {[
-          { label: "Complexity",           value: complexity,    set: setComplexity },
-          { label: "Counterpoint Density", value: counterpoint,  set: setCounterpoint },
-          { label: "Ornamentation",        value: ornamentation, set: setOrnamentation },
-        ].map(({ label, value, set }) => (
+        {([
+          { label: "Complexity",           value: complexity,    set: onComplexityChange,    hint: `${complexityToTokens(complexity[0])} tokens` },
+          { label: "Counterpoint Density", value: counterpoint,  set: onCounterpointChange,  hint: `top-k ${counterpointToTopK(counterpoint[0])}` },
+          { label: "Ornamentation",        value: ornamentation, set: onOrnamentationChange, hint: `temp ${ornamentationToTemp(ornamentation[0])}` },
+        ] as const).map(({ label, value, set, hint }) => (
           <div key={label}>
             <div className="flex justify-between items-center mb-3">
               <label className="text-sm font-medium">{label}</label>
-              <span className="text-sm text-primary font-semibold">{value[0]}%</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-muted-foreground font-mono">{hint}</span>
+                <span className="text-sm text-primary font-semibold">{value[0]}%</span>
+              </div>
             </div>
-            <Slider value={value} onValueChange={set} max={100} step={1}
+            <Slider value={value as number[]} onValueChange={set} max={100} step={1}
               className="[&_[role=slider]]:bg-primary [&_[role=slider]]:border-primary" />
           </div>
         ))}
       </div>
+
+      {/* Generation result card */}
+      {lastResult && (
+        <div className="bg-card rounded-lg p-4 border border-accent/40 mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Sparkles className="w-4 h-4 text-accent" />
+            <span className="text-sm font-semibold text-accent uppercase tracking-wider">
+              Generation Result
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <div>
+              <span className="text-muted-foreground">Tonal score</span>
+              <p className="font-semibold text-foreground">{lastResult.tonal_score.toFixed(2)}</p>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Grammar</span>
+              <p className={`font-semibold ${lastResult.is_valid ? "text-green-400" : "text-amber-400"}`}>
+                {lastResult.is_valid ? "Valid" : "Has violations"}
+              </p>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Forbidden rate</span>
+              <p className="font-semibold text-foreground">{lastResult.forbidden_rate.toFixed(4)}</p>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Time</span>
+              <p className="font-semibold text-foreground">{(lastResult.generation_time_ms / 1000).toFixed(1)}s</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error card */}
+      {genError && (
+        <div className="bg-destructive/10 rounded-lg p-4 border border-destructive/30 mb-6">
+          <p className="text-sm text-destructive">{genError}</p>
+        </div>
+      )}
 
       {/* Propagator Insight */}
       <div className="bg-card rounded-lg p-4 border border-border mb-6">
@@ -243,9 +327,22 @@ function ControlsPanel({ activeScore }: { activeScore: ReturnType<typeof useAppS
       <div className="flex-1" />
 
       {/* Regenerate */}
-      <Button className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-6 text-base font-semibold">
-        <RefreshCw className="w-5 h-5 mr-2" />
-        Regenerate Phrases
+      <Button
+        className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-6 text-base font-semibold"
+        onClick={onRegenerate}
+        disabled={isGenerating}
+      >
+        {isGenerating ? (
+          <>
+            <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+            Generating…
+          </>
+        ) : (
+          <>
+            <RefreshCw className="w-5 h-5 mr-2" />
+            Regenerate Phrases
+          </>
+        )}
       </Button>
     </div>
   )
@@ -256,6 +353,12 @@ function ControlsPanel({ activeScore }: { activeScore: ReturnType<typeof useAppS
 export default function BachWorkbench() {
   const [panelTab, setPanelTab] = useState<PanelTab>("copilot")
 
+  // ── Lifted control state ────────────────────────────────────────────────────
+  const [keySelect,     setKeySelect]     = useState("d-minor")
+  const [complexity,    setComplexity]    = useState([75])
+  const [counterpoint,  setCounterpoint]  = useState([60])
+  const [ornamentation, setOrnamentation] = useState([42])
+
   const {
     activeNav, setActiveNav,
     activeScore,
@@ -264,7 +367,49 @@ export default function BachWorkbench() {
   } = useAppState()
 
   const { play, pause, stop, seekTo, durationBeats } = useMidiPlayer()
-  const { isThinking } = useAiChat()
+  const chat = useAiChat()
+  const { isThinking } = chat
+
+  // ── Generation hook with Copilot message on complete ────────────────────────
+  // We keep keySelect in a ref so the onComplete callback always sees the
+  // current value without needing to recreate useGeneration.
+  const keySelectRef = useRef(keySelect)
+  keySelectRef.current = keySelect
+
+  const gen = useGeneration({
+    onComplete: (result: GenerationResponse) => {
+      // Switch to Copilot tab so the user sees the result message
+      setPanelTab("copilot")
+
+      const mode      = keySelectToMode(keySelectRef.current)
+      const topChords = result.rn_sequence.slice(0, 5).join(" → ")
+      const grammar   = result.is_valid ? "Valid" : "Has violations"
+      const content =
+        `**Generation complete** — ${result.chord_tokens.length} chord events in ${mode} mode.\n\n` +
+        `**Tonal score:** ${result.tonal_score.toFixed(2)} · **Grammar:** ${grammar}\n` +
+        `**Forbidden rate:** ${result.forbidden_rate.toFixed(4)} · **Time:** ${(result.generation_time_ms / 1000).toFixed(1)}s\n\n` +
+        `**Top chords:** ${topChords}`
+
+      // Inject directly as an assistant message — no AI round-trip
+      chat.appendMessage(content, "assistant", {
+        label: `Generated ${result.chord_tokens.length} chords`,
+        type:  "generation",
+      })
+    },
+  })
+
+  const handleRegenerate = useCallback(() => {
+    void gen.generate({
+      key_mode:    keySelectToMode(keySelect),
+      n_tokens:    complexityToTokens(complexity[0]),
+      temperature: ornamentationToTemp(ornamentation[0]),
+      top_k:       counterpointToTopK(counterpoint[0]),
+      prompt_bwv:  activeScore?.bwv ?? null,
+    })
+  }, [gen, keySelect, complexity, ornamentation, counterpoint, activeScore])
+
+  // ── Badge: pulse for both AI chat and generation ────────────────────────────
+  const aiActive = isThinking || gen.isGenerating
 
   const navItems = [
     { name: "Library"         as const, icon: Library   },
@@ -416,16 +561,20 @@ export default function BachWorkbench() {
             {getHeaderTitle()}
           </h2>
 
-          {/* AI ASSISTED badge — pulses when AI is thinking */}
+          {/* AI ASSISTED badge — pulses when AI is thinking or generating */}
           <span className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-semibold shrink-0 transition-colors ${
-            isThinking
+            aiActive
               ? "border-accent text-accent bg-accent/10"
               : "border-primary text-primary"
           }`}>
-            {isThinking && (
+            {aiActive && (
               <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
             )}
-            {isThinking ? "AI THINKING…" : "AI ASSISTED"}
+            {gen.isGenerating
+              ? "GENERATING…"
+              : isThinking
+              ? "AI THINKING…"
+              : "AI ASSISTED"}
           </span>
         </header>
 
@@ -434,7 +583,7 @@ export default function BachWorkbench() {
           {renderMainContent()}
         </div>
 
-        {/* Status bar — SYNTH STATUS instead of AI STATUS */}
+        {/* Status bar */}
         <footer className="h-8 border-t border-border flex items-center justify-between px-4 text-xs text-muted-foreground shrink-0">
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-2">
@@ -469,7 +618,7 @@ export default function BachWorkbench() {
         {/* Panel header + tab switcher */}
         <div className="p-4 pb-0 shrink-0">
           <div className="flex items-center gap-2 mb-4">
-            <Sparkles className={`w-5 h-5 ${isThinking ? "text-accent animate-pulse" : "text-primary"}`} />
+            <Sparkles className={`w-5 h-5 ${aiActive ? "text-accent animate-pulse" : "text-primary"}`} />
             <h2 className="font-serif text-lg font-semibold">AI Control Panel</h2>
           </div>
 
@@ -501,8 +650,18 @@ export default function BachWorkbench() {
         {/* Panel content */}
         <div className="flex-1 min-h-0 px-4 pb-4 flex flex-col">
           {panelTab === "copilot"
-            ? <CopilotPanel isThinking={isThinking} />
-            : <ControlsPanel activeScore={activeScore} />
+            ? <CopilotPanel chat={chat} />
+            : <ControlsPanel
+                activeScore={activeScore}
+                keySelect={keySelect}       onKeyChange={setKeySelect}
+                complexity={complexity}      onComplexityChange={setComplexity}
+                counterpoint={counterpoint}  onCounterpointChange={setCounterpoint}
+                ornamentation={ornamentation} onOrnamentationChange={setOrnamentation}
+                isGenerating={gen.isGenerating}
+                lastResult={gen.lastResult}
+                genError={gen.error}
+                onRegenerate={handleRegenerate}
+              />
           }
         </div>
       </aside>

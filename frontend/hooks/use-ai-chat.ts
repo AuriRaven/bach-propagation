@@ -42,10 +42,11 @@ export interface ChatMsg {
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export interface UseAiChatReturn {
-  messages:   ChatMsg[]
-  isThinking: boolean
-  send:       (text: string) => Promise<void>
-  clear:      () => void
+  messages:       ChatMsg[]
+  isThinking:     boolean
+  send:           (text: string) => Promise<void>
+  appendMessage:  (content: string, role?: MessageRole, versionCard?: VersionCard) => void
+  clear:          () => void
 }
 
 export function useAiChat(): UseAiChatReturn {
@@ -187,6 +188,24 @@ export function useAiChat(): UseAiChatReturn {
     }
   }, [messages, isThinking, buildContext, setActiveNav, activeScore])
 
+  // ── Append message (no AI round-trip) ──────────────────────────────────────
+  // Used by external callers (e.g. generation hook) to inject a message
+  // directly into the chat without triggering an AI response.
+
+  const appendMessage = useCallback(
+    (content: string, role: MessageRole = "assistant", versionCard?: VersionCard) => {
+      const msg: ChatMsg = {
+        id:        uid(),
+        role,
+        content,
+        timestamp: new Date(),
+        versionCard,
+      }
+      setMessages((prev) => [...prev, msg])
+    },
+    [],
+  )
+
   // ── Clear ──────────────────────────────────────────────────────────────────
 
   const clear = useCallback(() => {
@@ -200,5 +219,5 @@ export function useAiChat(): UseAiChatReturn {
     setIsThinking(false)
   }, [])
 
-  return { messages, isThinking, send, clear }
+  return { messages, isThinking, send, appendMessage, clear }
 }

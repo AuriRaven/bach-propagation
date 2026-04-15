@@ -2,10 +2,12 @@
  * frontend/hooks/use-load-into-workbench.ts
  *
  * Atomically fetches file details + notation data in parallel, hydrates
- * AppState, then navigates to "New Composition".
+ * AppState, then navigates to "Analysis".
  *
- * Invariant: the Composition view is never shown with null activeScore
- * or null notationData — both must resolve before navigation.
+ * Library → Analysis: loading a corpus piece opens the harmonic analysis view.
+ * New Composition is reserved for generated content (via the generation pipeline).
+ *
+ * Invariant: both activeScore and notationData must resolve before navigation.
  */
 
 "use client"
@@ -41,7 +43,7 @@ export function useLoadIntoWorkbench() {
 
       setActiveScore(file)
       setNotationData(notation)
-      setActiveNav("New Composition")
+      setActiveNav("Analysis")
     } catch (err) {
       console.error("[useLoadIntoWorkbench]", err)
       throw err

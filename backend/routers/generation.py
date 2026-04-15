@@ -105,6 +105,8 @@ async def lifespan(app):
 # ---------------------------------------------------------------------------
 
 class GenerationRequest(BaseModel):
+    key_root:    str   = Field(default="C",
+                               description="Pitch class root: C, C#, D, Eb, E, F, F#, G, Ab, A, Bb, B")
     key_mode:    str   = Field(default="minor", pattern="^(minor|major)$")
     n_tokens:    int   = Field(default=128, ge=16, le=512)
     temperature: float = Field(default=0.9, ge=0.1, le=2.0)
@@ -121,6 +123,35 @@ class GenerationResponse(BaseModel):
     forbidden_rate:     float
     musicxml_b64:       str
     generation_time_ms: float
+
+
+# ---------------------------------------------------------------------------
+# MusicXML encoding helper (avoids double-generation)
+# ---------------------------------------------------------------------------
+
+def _encode_sequence_to_musicxml(
+    generator: "MusicGenerator",
+    seq: "GeneratedSequence",
+    key_root: str = "C",
+) -> str:
+    """
+    Decode an already-generated sequence to music21 Score and return
+    base64-encoded MusicXML. This avoids calling generate() a second time.
+    """
+    import base64
+    import os
+    import tempfile
+
+    score = generator.decode_to_music21(seq, key_root=key_root)
+
+    with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        score.write("musicxml", fp=tmp_path)
+        with open(tmp_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    finally:
+        os.unlink(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +190,10 @@ async def generate_music(request: GenerationRequest):
     t_start = time.perf_counter()
 
     try:
-        # Run generation in a thread — avoids blocking the event loop
-        # (torch inference is synchronous)
+        # Run generation ONCE in a thread — avoids blocking the event loop
+        print(f"[GENERATION] Starting generate(): key_mode={request.key_mode}, "
+              f"n_tokens={request.n_tokens}, key_root={request.key_root}", flush=True)
+
         seq = await asyncio.to_thread(
             _generator.generate,
             request.key_mode,
@@ -169,12 +202,18 @@ async def generate_music(request: GenerationRequest):
             request.top_k,
         )
 
+        print(f"[GENERATION] generate() complete: {len(seq.chord_tokens)} tokens, "
+              f"tonal_score={seq.grammar_report.tonal_score:.2f}", flush=True)
+
+        # Decode the SAME sequence to MusicXML — no second generation call
         musicxml_b64 = await asyncio.to_thread(
-            _generator.generate_musicxml,
-            request.key_mode,
-            request.n_tokens,
-            request.temperature,
+            _encode_sequence_to_musicxml,
+            _generator,
+            seq,
+            request.key_root,
         )
+
+        print(f"[GENERATION] MusicXML encode complete: {len(musicxml_b64)} bytes", flush=True)
     except Exception as exc:
         logger.exception("Generation failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Generation failed: {exc}")

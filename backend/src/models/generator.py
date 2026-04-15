@@ -315,21 +315,30 @@ class MusicGenerator:
     # Music21 export
     # ------------------------------------------------------------------
 
+    # Cello range: C2 (MIDI 36) to G5 (MIDI 79) for idiomatic writing.
+    # Extended range up to A5 (81) for occasional high passages.
+    _CELLO_LOW  = 36   # C2
+    _CELLO_HIGH = 79   # G5
+
     def decode_to_music21(
         self,
         sequence: GeneratedSequence,
         instrument: str = "violoncello",
+        key_root: str = "C",
     ):
         """
         Convert generated chord token sequence → music21 Score.
 
-        Each token becomes a quarter-note chord in root position.
-        Key signature is inferred from sequence.metadata["key_mode"].
-        Instrument is set to violoncello (thesis target).
+        Each token becomes a quarter-note chord in root position,
+        clamped to cello range (C2–G5).
+
+        Args:
+            sequence:   GeneratedSequence from generate().
+            instrument: music21 instrument name.
+            key_root:   Pitch class for key signature (e.g. "D", "Eb").
 
         Returns:
-            music21.stream.Score — MusicXML-exportable via
-            score.write("musicxml", "output.xml").
+            music21.stream.Score — MusicXML-exportable.
         """
         import music21 as m21
 
@@ -341,27 +350,115 @@ class MusicGenerator:
         instr = m21.instrument.fromString(instrument)
         part.append(instr)
 
-        # Key signature
-        ks = m21.key.Key("c", key_mode) if key_mode == "minor" \
-             else m21.key.Key("C", key_mode)
+        # Key signature — use user-specified root
+        root_for_key = key_root.lower() if key_mode == "minor" else key_root.upper()
+        ks = m21.key.Key(root_for_key, key_mode)
         part.append(ks)
 
         # Time signature
         part.append(m21.meter.TimeSignature("4/4"))
 
-        for token_id in sequence.chord_tokens:
+        # ── Arpeggiator — convert block chords to broken-chord patterns ──
+        # Mimics Bach cello suite texture (e.g. BWV 1007 Prelude).
+        # Each quarter-note chord token → 4 sixteenth notes.
+        #
+        # Patterns (based on chord size):
+        #   Triad [P1, P2, P3]:
+        #     Even beats: P1, P3, P2, P3  (bass-top-mid-top)
+        #     Odd beats:  P1, P2, P3, P2  (ascending-descending)
+        #   7th chord [P1, P2, P3, P4]:
+        #     Even beats: P1, P3, P2, P4  (bass-5th-3rd-7th)
+        #     Odd beats:  P1, P2, P3, P4  (ascending)
+
+        for beat_idx, token_id in enumerate(sequence.chord_tokens):
             label = self._vocab.chord_label(token_id)
             m21_element = self._chord_label_to_music21(label)
-            part.append(m21_element)
+
+            if isinstance(m21_element, m21.chord.Chord):
+                m21_element = self._clamp_to_cello_range(m21_element)
+                pitches = sorted(m21_element.pitches, key=lambda p: p.midi)
+
+                if len(pitches) >= 4:
+                    # 7th chord: alternate two patterns
+                    if beat_idx % 2 == 0:
+                        pattern = [pitches[0], pitches[2], pitches[1], pitches[3]]
+                    else:
+                        pattern = [pitches[0], pitches[1], pitches[2], pitches[3]]
+                elif len(pitches) == 3:
+                    # Triad: alternate two patterns
+                    if beat_idx % 2 == 0:
+                        pattern = [pitches[0], pitches[2], pitches[1], pitches[2]]
+                    else:
+                        pattern = [pitches[0], pitches[1], pitches[2], pitches[1]]
+                elif len(pitches) == 2:
+                    # Dyad: alternating
+                    pattern = [pitches[0], pitches[1], pitches[0], pitches[1]]
+                else:
+                    # Single note: repeated
+                    pattern = [pitches[0]] * 4
+
+                for p in pattern:
+                    n = m21.note.Note(p)
+                    n.quarterLength = 0.25  # sixteenth note
+                    part.append(n)
+
+            elif isinstance(m21_element, m21.note.Note):
+                m21_element = self._clamp_note_to_cello_range(m21_element)
+                part.append(m21_element)
+            else:
+                # Rest — keep as quarter note
+                part.append(m21_element)
 
         score.append(part)
         return score
+
+    def _clamp_to_cello_range(self, chord) -> "m21.chord.Chord":
+        """Transpose a chord so all pitches sit within cello range (C2–G5)."""
+        try:
+            # Shift entire chord down by octaves until bass is near C2–C3
+            for _ in range(8):  # safety limit — never loop more than 8 octaves
+                if chord.bass().midi <= 48 or chord.bass().midi - 12 < self._CELLO_LOW:
+                    break
+                chord = chord.transpose(-12)
+
+            for _ in range(8):
+                if chord.bass().midi >= self._CELLO_LOW:
+                    break
+                chord = chord.transpose(12)
+
+            # If highest note exceeds ceiling, shift down one octave
+            # chord.pitches is sorted low→high in music21
+            highest_midi = chord.pitches[-1].midi
+            if highest_midi > self._CELLO_HIGH:
+                chord = chord.transpose(-12)
+                # Safety: if now below floor, shift back up
+                if chord.bass().midi < self._CELLO_LOW:
+                    chord = chord.transpose(12)
+        except Exception:
+            pass  # if anything fails, return chord as-is
+        return chord
+
+    def _clamp_note_to_cello_range(self, note) -> "m21.note.Note":
+        """Transpose a single note into cello range."""
+        try:
+            for _ in range(8):
+                if note.pitch.midi <= self._CELLO_HIGH:
+                    break
+                note = note.transpose(-12)
+            for _ in range(8):
+                if note.pitch.midi >= self._CELLO_LOW:
+                    break
+                note = note.transpose(12)
+        except Exception:
+            pass
+        return note
 
     def generate_musicxml(
         self,
         key_mode:    str   = "minor",
         n_tokens:    int   = 128,
         temperature: float = 0.9,
+        key_root:    str   = "C",
     ) -> str:
         """
         Convenience method: generate → decode → return base64 MusicXML string.
@@ -369,7 +466,7 @@ class MusicGenerator:
         """
         seq   = self.generate(key_mode=key_mode, n_tokens=n_tokens,
                               temperature=temperature)
-        score = self.decode_to_music21(seq)
+        score = self.decode_to_music21(seq, key_root=key_root)
 
         import tempfile, os
         with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:

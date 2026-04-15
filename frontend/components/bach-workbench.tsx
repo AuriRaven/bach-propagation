@@ -47,10 +47,10 @@ function counterpointToTopK(v: number): number {
   return Math.round(1 + (v / 100) * (50 - 1))
 }
 
-/** Extract "major" | "minor" from select value like "d-minor" */
-function keySelectToMode(v: string): "major" | "minor" {
-  return v.endsWith("-major") ? "major" : "minor"
-}
+/** All 12 pitch classes for key root selection */
+const PITCH_CLASSES = [
+  "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B",
+] as const
 
 // ─── Loading overlay ──────────────────────────────────────────────────────────
 
@@ -201,8 +201,10 @@ function CopilotPanel({ chat, onPlayVersion, onRevert }: {
 
 interface ControlsPanelProps {
   activeScore:    ReturnType<typeof useAppState>["activeScore"]
-  // Controlled slider/select state
-  keySelect:      string;       onKeyChange:          (v: string) => void
+  // Key controls (split into root + mode)
+  keyRoot:        string;       onKeyRootChange:      (v: string) => void
+  keyMode:        "major" | "minor"; onKeyModeChange: (v: "major" | "minor") => void
+  // Controlled slider state
   complexity:     number[];     onComplexityChange:   (v: number[]) => void
   counterpoint:   number[];     onCounterpointChange: (v: number[]) => void
   ornamentation:  number[];     onOrnamentationChange:(v: number[]) => void
@@ -215,7 +217,8 @@ interface ControlsPanelProps {
 
 function ControlsPanel({
   activeScore,
-  keySelect, onKeyChange,
+  keyRoot, onKeyRootChange,
+  keyMode, onKeyModeChange,
   complexity, onComplexityChange,
   counterpoint, onCounterpointChange,
   ornamentation, onOrnamentationChange,
@@ -224,29 +227,26 @@ function ControlsPanel({
 }: ControlsPanelProps) {
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
-      {/* Key & Time */}
+      {/* Key Root & Mode */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         <div>
           <label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Key</label>
-          <Select value={keySelect} onValueChange={onKeyChange}>
+          <Select value={keyRoot} onValueChange={onKeyRootChange}>
             <SelectTrigger className="bg-card border-border"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="c-major">C Major</SelectItem>
-              <SelectItem value="d-minor">D Minor</SelectItem>
-              <SelectItem value="g-major">G Major</SelectItem>
-              <SelectItem value="a-minor">A Minor</SelectItem>
+              {PITCH_CLASSES.map((pc) => (
+                <SelectItem key={pc} value={pc}>{pc}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
         <div>
-          <label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Time</label>
-          <Select defaultValue="3-8">
+          <label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Mode</label>
+          <Select value={keyMode} onValueChange={(v) => onKeyModeChange(v as "major" | "minor")}>
             <SelectTrigger className="bg-card border-border"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="4-4">4/4</SelectItem>
-              <SelectItem value="3-4">3/4</SelectItem>
-              <SelectItem value="3-8">3/8</SelectItem>
-              <SelectItem value="6-8">6/8</SelectItem>
+              <SelectItem value="major">Major</SelectItem>
+              <SelectItem value="minor">Minor</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -361,7 +361,8 @@ export default function BachWorkbench() {
   const [panelTab, setPanelTab] = useState<PanelTab>("copilot")
 
   // ── Lifted control state ────────────────────────────────────────────────────
-  const [keySelect,     setKeySelect]     = useState("d-minor")
+  const [keyRoot,       setKeyRoot]       = useState("D")
+  const [keyMode,       setKeyMode]       = useState<"major" | "minor">("minor")
   const [complexity,    setComplexity]    = useState([75])
   const [counterpoint,  setCounterpoint]  = useState([60])
   const [ornamentation, setOrnamentation] = useState([42])
@@ -385,21 +386,22 @@ export default function BachWorkbench() {
   const hasGeneratedRef    = useRef(false)
 
   // ── Generation hook with Copilot message on complete ────────────────────────
-  // We keep keySelect in a ref so the onComplete callback always sees the
-  // current value without needing to recreate useGeneration.
-  const keySelectRef = useRef(keySelect)
-  keySelectRef.current = keySelect
+  const keyRootRef = useRef(keyRoot)
+  keyRootRef.current = keyRoot
+  const keyModeRef = useRef(keyMode)
+  keyModeRef.current = keyMode
 
   const gen = useGeneration({
     onComplete: (result: GenerationResponse) => {
       // Switch to Copilot tab so the user sees the result message
       setPanelTab("copilot")
 
-      const mode      = keySelectToMode(keySelectRef.current)
+      const mode      = keyModeRef.current
+      const root      = keyRootRef.current
       const topChords = result.rn_sequence.slice(0, 5).join(" → ")
       const grammar   = result.is_valid ? "Valid" : "Has violations"
       const content =
-        `**Generation complete** — ${result.chord_tokens.length} chord events in ${mode} mode.\n\n` +
+        `**Generation complete** — ${result.chord_tokens.length} chord events in ${root} ${mode}.\n\n` +
         `**Tonal score:** ${result.tonal_score.toFixed(2)} · **Grammar:** ${grammar}\n` +
         `**Forbidden rate:** ${result.forbidden_rate.toFixed(4)} · **Time:** ${(result.generation_time_ms / 1000).toFixed(1)}s\n\n` +
         `**Top chords:** ${topChords}`
@@ -441,13 +443,14 @@ export default function BachWorkbench() {
 
   const handleRegenerate = useCallback(() => {
     void gen.generate({
-      key_mode:    keySelectToMode(keySelect),
+      key_root:    keyRoot,
+      key_mode:    keyMode,
       n_tokens:    complexityToTokens(complexity[0]),
       temperature: ornamentationToTemp(ornamentation[0]),
       top_k:       counterpointToTopK(counterpoint[0]),
       prompt_bwv:  activeScore?.bwv ?? null,
     })
-  }, [gen, keySelect, complexity, ornamentation, counterpoint, activeScore])
+  }, [gen, keyRoot, keyMode, complexity, ornamentation, counterpoint, activeScore])
 
   // ── Play version — load generated notation into Tone.js and play ──────────
   const handlePlayVersion = useCallback(async () => {
@@ -715,7 +718,8 @@ export default function BachWorkbench() {
               />
             : <ControlsPanel
                 activeScore={activeScore}
-                keySelect={keySelect}       onKeyChange={setKeySelect}
+                keyRoot={keyRoot}           onKeyRootChange={setKeyRoot}
+                keyMode={keyMode}           onKeyModeChange={setKeyMode}
                 complexity={complexity}      onComplexityChange={setComplexity}
                 counterpoint={counterpoint}  onCounterpointChange={setCounterpoint}
                 ornamentation={ornamentation} onOrnamentationChange={setOrnamentation}

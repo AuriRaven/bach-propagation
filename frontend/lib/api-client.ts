@@ -109,6 +109,7 @@ export interface ScoreHarmonicAnalysis {
 // ─── Generation types ─────────────────────────────────────────────────────────
 
 export interface GenerationRequest {
+  key_root?: string             // "C", "D", "Eb", etc. — default "C"
   key_mode?: "minor" | "major"
   n_tokens?: number          // 16–512
   temperature?: number       // 0.1–2.0

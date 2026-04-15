@@ -7,7 +7,7 @@
  *   - User / assistant roles with distinct styling
  *   - Minimal markdown: **bold**, *italic*, bullet lists, _italic_
  *   - Streaming cursor animation
- *   - Version card scaffold (Play / Revert disabled until model exists)
+ *   - Version card with Play / Revert for generation results
  */
 
 "use client"
@@ -66,7 +66,11 @@ const VERSION_ICONS = {
   generation: Music2,
 }
 
-function VersionCardWidget({ card }: { card: VersionCard }) {
+function VersionCardWidget({ card, onPlay, onRevert }: {
+  card: VersionCard
+  onPlay?: () => void
+  onRevert?: () => void
+}) {
   const Icon = VERSION_ICONS[card.type]
 
   return (
@@ -78,18 +82,20 @@ function VersionCardWidget({ card }: { card: VersionCard }) {
         </span>
       </div>
 
-      {/* Generation actions — scaffold, disabled until model exists */}
+      {/* Generation actions — Play and Revert */}
       {card.type === "generation" && (
         <div className="flex gap-2 mt-2">
           <Button variant="outline" size="sm"
             className="h-7 text-xs border-primary/30 text-primary hover:bg-primary/10"
-            disabled title="Available after model training">
+            onClick={onPlay}
+            disabled={!onPlay}>
             <Play className="w-3 h-3 mr-1" />
             Play version
           </Button>
           <Button variant="outline" size="sm"
-            className="h-7 text-xs border-muted-foreground/30 text-muted-foreground"
-            disabled title="Available after model training">
+            className="h-7 text-xs border-muted-foreground/30 text-muted-foreground hover:text-foreground"
+            onClick={onRevert}
+            disabled={!onRevert}>
             <RotateCcw className="w-3 h-3 mr-1" />
             Revert
           </Button>
@@ -123,7 +129,11 @@ function StreamingCursor() {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function ChatMessage({ msg }: { msg: ChatMsg }) {
+export function ChatMessage({ msg, onPlayVersion, onRevert }: {
+  msg: ChatMsg
+  onPlayVersion?: () => void
+  onRevert?: () => void
+}) {
   const isUser = msg.role === "user"
 
   if (isUser) {
@@ -148,11 +158,15 @@ export function ChatMessage({ msg }: { msg: ChatMsg }) {
 
           {/* Version card */}
           {msg.versionCard && !msg.isStreaming && (
-            <VersionCardWidget card={msg.versionCard} />
+            <VersionCardWidget
+              card={msg.versionCard}
+              onPlay={msg.versionCard.type === "generation" ? onPlayVersion : undefined}
+              onRevert={msg.versionCard.type === "generation" ? onRevert : undefined}
+            />
           )}
         </div>
 
-        {/* Timestamp — suppressHydrationWarning prevents server/client timezone mismatch */}
+        {/* Timestamp */}
         <div className="flex items-center gap-1 px-1">
           <Clock className="w-2.5 h-2.5 text-muted-foreground/40" />
           <span className="text-[10px] text-muted-foreground/40" suppressHydrationWarning>

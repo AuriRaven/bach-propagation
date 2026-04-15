@@ -94,6 +94,11 @@ class VexFlowPayload(BaseModel):
     total_beats: float
 
 
+class NotationParseRequest(BaseModel):
+    """Request body for POST /api/notation/parse."""
+    musicxml_b64: str
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _signed_url(supabase, path: str) -> str:
@@ -344,33 +349,42 @@ async def get_notation(
     return payload
 
 
+@corpus_router.post("/notation/parse", response_model=VexFlowPayload)
+async def parse_notation(req: NotationParseRequest):
+    """
+    Parse base64-encoded MusicXML into a VexFlowPayload.
+
+    Used by the generation pipeline: the model produces MusicXML,
+    this endpoint converts it to the same format the piano roll expects.
+    No Supabase dependency — purely a conversion utility.
+    """
+    try:
+        payload = await asyncio.to_thread(
+            _parse_musicxml_b64_to_vexflow, req.musicxml_b64
+        )
+    except Exception as exc:
+        logger.exception("MusicXML base64 parse failed")
+        raise HTTPException(
+            status_code=422, detail=f"Failed to parse MusicXML: {exc}"
+        ) from exc
+
+    return payload
+
 
 # ─── music21 → notation payload (synchronous, runs in thread pool) ───────────
 
-def _parse_score_to_vexflow(signed_url: str, storage_path: str) -> VexFlowPayload:
+def _parse_file_to_vexflow(file_path: str, suffix: str) -> VexFlowPayload:
     """
-    Parse a MIDI or MusicXML file into a VexFlowPayload.
+    Core parser: local file path → VexFlowPayload.
 
-    MIDI files: music21 does not create Measure objects automatically —
-    we call makeMeasures() to impose barlines, then extract notes.
-
-    MusicXML files: Measure objects already exist.
-
-    The payload stores every note with its absolute beat offset and MIDI pitch
-    so the piano-roll renderer can position and highlight notes precisely.
+    Shared by both the corpus notation endpoint (downloads from Supabase)
+    and the generation notation endpoint (decodes from base64).
     """
-    import tempfile
-    import urllib.request
     from fractions import Fraction
 
     import music21 as m21
 
-    suffix = Path(storage_path).suffix.lower() or ".mid"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        urllib.request.urlretrieve(signed_url, tmp.name)  # noqa: S310
-        tmp_path = tmp.name
-
-    score = m21.converter.parse(tmp_path)
+    score = m21.converter.parse(file_path)
 
     # ── Extract time + key sig before flattening ──────────────────────────
     ts_obj = score.recurse().getElementsByClass(m21.meter.TimeSignature).first()
@@ -458,3 +472,36 @@ def _parse_score_to_vexflow(signed_url: str, storage_path: str) -> VexFlowPayloa
         key_signature=key_sig_str,
         total_beats=float(total_beats),
     )
+
+
+def _parse_score_to_vexflow(signed_url: str, storage_path: str) -> VexFlowPayload:
+    """
+    Download from signed URL + parse.
+    Used by GET /api/corpus/{id}/notation.
+    """
+    import tempfile
+    import urllib.request
+
+    suffix = Path(storage_path).suffix.lower() or ".mid"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        urllib.request.urlretrieve(signed_url, tmp.name)  # noqa: S310
+        tmp_path = tmp.name
+
+    return _parse_file_to_vexflow(tmp_path, suffix)
+
+
+def _parse_musicxml_b64_to_vexflow(musicxml_b64: str) -> VexFlowPayload:
+    """
+    Decode base64 MusicXML + parse.
+    Used by POST /api/notation/parse.
+    """
+    import base64
+    import tempfile
+
+    xml_bytes = base64.b64decode(musicxml_b64)
+
+    with tempfile.NamedTemporaryFile(suffix=".musicxml", delete=False) as tmp:
+        tmp.write(xml_bytes)
+        tmp_path = tmp.name
+
+    return _parse_file_to_vexflow(tmp_path, ".musicxml")

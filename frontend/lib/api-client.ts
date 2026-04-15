@@ -217,6 +217,18 @@ export const api = {
     },
   },
 
+  notation: {
+    /** Parse base64-encoded MusicXML into VexFlowPayload for the piano roll.
+     *  Used after generation to display the result. */
+    parse(musicxml_b64: string): Promise<VexFlowPayload> {
+      return fetcher<VexFlowPayload>(
+        "/api/notation/parse",
+        { method: "POST", body: JSON.stringify({ musicxml_b64 }) },
+        60_000,  // 60s — music21 parsing can be slow
+      )
+    },
+  },
+
   generation: {
     /** Generate chord sequence via the Music Transformer model.
      *  Returns 503 if the model checkpoint is not loaded. */

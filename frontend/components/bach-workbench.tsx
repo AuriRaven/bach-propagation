@@ -21,11 +21,11 @@ import { LibraryView }     from "@/components/views/library-view"
 import { SettingsView }    from "@/components/views/settings-view"
 import { ChatMessage }     from "@/components/chat-message"
 
-import { useAppState }   from "@/lib/app-state"
+import { useAppState, type VexFlowPayload, type CorpusFile } from "@/lib/app-state"
 import { useMidiPlayer } from "@/hooks/use-midi-player"
 import { useAiChat, type UseAiChatReturn } from "@/hooks/use-ai-chat"
 import { useGeneration } from "@/hooks/use-generation"
-import type { GenerationResponse } from "@/lib/api-client"
+import { api, type GenerationResponse } from "@/lib/api-client"
 
 type ViewType    = "Library" | "New Composition" | "Analysis" | "Settings"
 type PanelTab    = "copilot" | "controls"
@@ -103,7 +103,11 @@ function ProgressScrubber({
 
 // ─── Copilot panel ────────────────────────────────────────────────────────────
 
-function CopilotPanel({ chat }: { chat: UseAiChatReturn }) {
+function CopilotPanel({ chat, onPlayVersion, onRevert }: {
+  chat: UseAiChatReturn
+  onPlayVersion?: () => void
+  onRevert?: () => void
+}) {
   const { messages, isThinking, send, clear } = chat
   const [input,   setInput]   = useState("")
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -134,7 +138,10 @@ function CopilotPanel({ chat }: { chat: UseAiChatReturn }) {
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto py-2 pr-1 space-y-1">
         {messages.map((msg) => (
-          <ChatMessage key={msg.id} msg={msg} />
+          <ChatMessage key={msg.id} msg={msg}
+            onPlayVersion={onPlayVersion}
+            onRevert={onRevert}
+          />
         ))}
 
         {/* Thinking indicator */}
@@ -361,14 +368,21 @@ export default function BachWorkbench() {
 
   const {
     activeNav, setActiveNav,
-    activeScore,
+    activeScore, setActiveScore,
+    notationData,
     playbackState, playbackPosition,
     isLoadingWorkbench,
+    setNotationData,
   } = useAppState()
 
-  const { play, pause, stop, seekTo, durationBeats } = useMidiPlayer()
+  const { play, pause, stop, seekTo, loadFromNotation, durationBeats } = useMidiPlayer()
   const chat = useAiChat()
   const { isThinking } = chat
+
+  // ── Revert state — saved before generation loads new notation ──────────────
+  const prevNotationRef   = useRef<VexFlowPayload | null>(null)
+  const prevActiveScoreRef = useRef<CorpusFile | null>(null)
+  const hasGeneratedRef    = useRef(false)
 
   // ── Generation hook with Copilot message on complete ────────────────────────
   // We keep keySelect in a ref so the onComplete callback always sees the
@@ -395,6 +409,33 @@ export default function BachWorkbench() {
         label: `Generated ${result.chord_tokens.length} chords`,
         type:  "generation",
       })
+
+      // Parse MusicXML → VexFlowPayload and load into piano roll
+      if (result.musicxml_b64) {
+        // Save current state for Revert — only on first generation
+        if (!hasGeneratedRef.current) {
+          prevNotationRef.current    = notationData ?? null
+          prevActiveScoreRef.current = activeScore ?? null
+        }
+
+        api.notation.parse(result.musicxml_b64)
+          .then((notation) => {
+            hasGeneratedRef.current = true
+            setNotationData(notation)
+            setActiveNav("New Composition")
+            chat.appendMessage(
+              `_Score loaded into the piano roll — ${notation.measures.length} measures, ${notation.key_signature}, ${notation.time_signature}._`,
+              "assistant",
+            )
+          })
+          .catch((err) => {
+            console.warn("[BachWorkbench] Notation parse failed:", err)
+            chat.appendMessage(
+              "_Could not parse the generated score for the piano roll. The generation data is still available in the Controls panel._",
+              "assistant",
+            )
+          })
+      }
     },
   })
 
@@ -407,6 +448,24 @@ export default function BachWorkbench() {
       prompt_bwv:  activeScore?.bwv ?? null,
     })
   }, [gen, keySelect, complexity, ornamentation, counterpoint, activeScore])
+
+  // ── Play version — load generated notation into Tone.js and play ──────────
+  const handlePlayVersion = useCallback(async () => {
+    if (!notationData) return
+    await stop()
+    await loadFromNotation(notationData, 120)
+    await play()
+    setActiveNav("New Composition")
+  }, [notationData, stop, loadFromNotation, play, setActiveNav])
+
+  // ── Revert — restore the state from before generation ─────────────────────
+  const handleRevert = useCallback(async () => {
+    await stop()
+    setNotationData(prevNotationRef.current)
+    setActiveScore(prevActiveScoreRef.current)
+    hasGeneratedRef.current = false
+    chat.appendMessage("_Reverted to previous score._", "assistant")
+  }, [stop, setNotationData, setActiveScore, chat])
 
   // ── Badge: pulse for both AI chat and generation ────────────────────────────
   const aiActive = isThinking || gen.isGenerating
@@ -650,7 +709,10 @@ export default function BachWorkbench() {
         {/* Panel content */}
         <div className="flex-1 min-h-0 px-4 pb-4 flex flex-col">
           {panelTab === "copilot"
-            ? <CopilotPanel chat={chat} />
+            ? <CopilotPanel chat={chat}
+                onPlayVersion={handlePlayVersion}
+                onRevert={handleRevert}
+              />
             : <ControlsPanel
                 activeScore={activeScore}
                 keySelect={keySelect}       onKeyChange={setKeySelect}

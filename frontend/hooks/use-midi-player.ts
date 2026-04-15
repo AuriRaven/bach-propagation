@@ -3,16 +3,39 @@
  *
  * Tone.js MIDI playback with stable beat-position tracking.
  *
+ * Two load paths:
+ *   1. MIDI file from signed URL (corpus pieces)
+ *   2. VexFlowPayload from generation (loadFromNotation)
+ *
  * Beat tracking uses transport.seconds (monotonic) × (bpm/60) — never
  * the BBT string position, which resets on loop or reposition.
  *
- * Exposes: play, pause, stop, seekTo, playbackState, durationBeats
+ * Exposes: play, pause, stop, seekTo, loadFromNotation, playbackState, durationBeats
  */
 
 "use client"
 
 import { useEffect, useRef, useCallback } from "react"
-import { useAppState } from "@/lib/app-state"
+import { useAppState, type VexFlowPayload } from "@/lib/app-state"
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Convert music21 pitch notation to Tone.js compatible format.
+ *  "E-4" → "Eb4", "B--3" → "Bbb3", "F#4" stays "F#4" */
+function m21PitchToTone(pitch: string): string {
+  return pitch.replace(/-/g, "b")
+}
+
+/** Parse a fraction string like "1/4" → 0.25, or a plain number "2" → 2.0 */
+function parseFraction(s: string): number {
+  if (s.includes("/")) {
+    const [n, d] = s.split("/").map(Number)
+    return d ? n / d : n
+  }
+  return parseFloat(s) || 0
+}
+
+// ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useMidiPlayer() {
   const {
@@ -28,6 +51,7 @@ export function useMidiPlayer() {
   const bpmRef          = useRef<number>(120)
   const isReadyRef      = useRef(false)
   const rafRef          = useRef<number | null>(null)
+  const sourceRef       = useRef<"midi" | "notation" | null>(null)
 
   // ── Teardown ──────────────────────────────────────────────────────────────
   const teardown = useCallback(async () => {
@@ -49,10 +73,10 @@ export function useMidiPlayer() {
     synthsRef.current = []
     loadedUrlRef.current = null
     isReadyRef.current   = false
+    sourceRef.current    = null
   }, [])
 
   // ── rAF tick — updates playback position every animation frame ───────────
-  // Uses transport.seconds × bpm/60 → stable quarter-beat position.
   const startTick = useCallback((Tone: typeof import("tone")) => {
     const tick = () => {
       const transport = Tone.getTransport()
@@ -116,11 +140,67 @@ export function useMidiPlayer() {
       }
 
       isReadyRef.current = true
+      sourceRef.current  = "midi"
     })()
 
     return () => { void teardown() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeScore?.signed_url])
+
+  // ── Load from VexFlowPayload (generated scores) ──────────────────────────
+
+  const loadFromNotation = useCallback(async (data: VexFlowPayload, bpm = 120) => {
+    const Tone = await import("tone")
+    await teardown()
+
+    bpmRef.current = bpm
+    const transport = Tone.getTransport()
+    transport.bpm.value = bpm
+    transport.loop = false
+
+    const synth = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "triangle" },
+      envelope:   { attack: 0.02, decay: 0.1, sustain: 0.5, release: 0.8 },
+      volume:     -14,
+    }).toDestination()
+
+    synthsRef.current.push(synth)
+
+    let scheduledCount = 0
+
+    for (const measure of data.measures) {
+      for (const note of measure.notes) {
+        if (note.type === "rest") continue
+
+        const pitches = note.pitches
+          ? note.pitches.map(m21PitchToTone)
+          : note.pitch
+          ? [m21PitchToTone(note.pitch)]
+          : []
+
+        if (pitches.length === 0) continue
+
+        const offsetBeats   = parseFraction(note.offset)
+        const durationBeats = parseFraction(note.duration)
+        const offsetSec     = offsetBeats * (60 / bpm)
+        const durationSec   = Math.max(durationBeats * (60 / bpm), 0.05)
+
+        transport.schedule((time) => {
+          synth.triggerAttackRelease(pitches, durationSec, time)
+        }, offsetSec)
+
+        scheduledCount++
+      }
+    }
+
+    console.info(
+      `[useMidiPlayer] Loaded ${scheduledCount} notes from notation, ` +
+      `${data.measures.length} measures, ${bpm} BPM`
+    )
+
+    isReadyRef.current = true
+    sourceRef.current  = "notation"
+  }, [teardown])
 
   // ── Controls ──────────────────────────────────────────────────────────────
 
@@ -158,7 +238,6 @@ export function useMidiPlayer() {
 
   const seekTo = useCallback(async (beat: number) => {
     const Tone = await import("tone")
-    // Convert beats → seconds using stored BPM
     Tone.getTransport().seconds = beat / (bpmRef.current / 60)
     setPlaybackPosition(beat)
   }, [setPlaybackPosition])
@@ -166,5 +245,5 @@ export function useMidiPlayer() {
   // Total duration in beats from notation data
   const durationBeats = notationData?.total_beats ?? 0
 
-  return { play, pause, stop, seekTo, playbackState, durationBeats }
+  return { play, pause, stop, seekTo, loadFromNotation, playbackState, durationBeats }
 }

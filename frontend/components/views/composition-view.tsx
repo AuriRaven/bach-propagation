@@ -282,7 +282,7 @@ export function CompositionView() {
     return () => ro.disconnect()
   }, [redraw])
 
-  if (!activeScore || !notationData) {
+  if (!notationData) {
     return (
       <div className="bg-card rounded-xl p-8 min-h-full border border-border flex flex-col">
         <h2 className="text-center font-serif text-2xl italic text-foreground/90 mb-8">
@@ -297,12 +297,14 @@ export function CompositionView() {
     )
   }
 
-  const title = activeScore.movement_name?.trim()
-    || (activeScore.bwv ? `BWV ${activeScore.bwv}` : null)
-    || activeScore.collection?.replace(/_/g, " ") || "Score"
+  const title = activeScore?.movement_name?.trim()
+    || (activeScore?.bwv ? `BWV ${activeScore.bwv}` : null)
+    || activeScore?.collection?.replace(/_/g, " ")
+    || "Generated Composition"
 
-  const subtitle = [activeScore.key_signature, activeScore.time_signature]
-    .filter(Boolean).join(" · ")
+  const subtitle = activeScore
+    ? [activeScore.key_signature, activeScore.time_signature].filter(Boolean).join(" · ")
+    : [notationData.key_signature, notationData.time_signature].filter(Boolean).join(" · ")
 
   return (
     <div className="bg-card rounded-xl p-6 min-h-full border border-border flex flex-col gap-4">
@@ -347,13 +349,15 @@ export function CompositionView() {
               ? `${notationData.measures.length} measures · ${notationData.key_signature}`
               : notationData.key_signature}
           </span>
-          <Button variant="ghost" size="sm"
-            className="h-7 px-2 text-xs text-muted-foreground hover:text-primary"
-            onClick={handleRefresh} disabled={refreshing}
-            title="Force re-parse notation from MIDI">
-            <RefreshCw className={`w-3 h-3 mr-1 ${refreshing ? "animate-spin" : ""}`} />
-            {refreshing ? "Re-parsing…" : "Refresh score"}
-          </Button>
+          {activeScore && (
+            <Button variant="ghost" size="sm"
+              className="h-7 px-2 text-xs text-muted-foreground hover:text-primary"
+              onClick={handleRefresh} disabled={refreshing}
+              title="Force re-parse notation from MIDI">
+              <RefreshCw className={`w-3 h-3 mr-1 ${refreshing ? "animate-spin" : ""}`} />
+              {refreshing ? "Re-parsing…" : "Refresh score"}
+            </Button>
+          )}
         </div>
       </div>
     </div>

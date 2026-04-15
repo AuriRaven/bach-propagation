@@ -48,6 +48,7 @@ class CorpusFileRow(BaseModel):
     storage_object_path: str
     storage_url: str | None = None
     load_status: str
+    file_format: str | None = None  # "mid", "krn", "musicxml" etc.
     key_signature: str | None = None
     time_signature: str | None = None
     num_measures: int | None = None
@@ -111,14 +112,22 @@ def _signed_url(supabase, path: str) -> str:
 
 
 def _row_to_model(row: dict) -> CorpusFileRow:
+    # Infer file_format from storage_object_path if not explicitly in the row
+    file_format = row.get("file_format")
+    if not file_format:
+        sop = row.get("storage_object_path", "")
+        if sop:
+            file_format = Path(sop).suffix.lstrip(".").lower() or None
+
     return CorpusFileRow(
         id=row["id"],
         bwv=row.get("bwv"),
         movement_name=row.get("movement_name"),
         collection=row.get("collection", ""),
-        storage_object_path=row.get("storage_object_path", ""),  # may be absent in corpus_full
+        storage_object_path=row.get("storage_object_path", ""),
         storage_url=row.get("storage_url"),
         load_status=row.get("load_status", ""),
+        file_format=file_format,
         key_signature=row.get("key_signature"),
         time_signature=row.get("time_signature"),
         num_measures=row.get("num_measures"),
@@ -137,6 +146,7 @@ async def corpus_stats(supabase=Depends(get_supabase)):
     resp = (
         supabase.from_("corpus_full")
         .select("collection, key_signature", count="exact")
+        .in_("load_status", ["metadata_extracted", "embedded"])
         .execute()
     )
     if resp.data is None:
@@ -205,6 +215,7 @@ async def list_corpus(
     offset = (page - 1) * page_size
 
     q = supabase.from_("corpus_full").select("*", count="exact")
+    q = q.in_("load_status", ["metadata_extracted", "embedded"])
     if collection:
         q = q.eq("collection", collection)
     if form_tag:
@@ -395,63 +406,87 @@ def _parse_file_to_vexflow(file_path: str, suffix: str) -> VexFlowPayload:
 
     beats_per_measure = int(ts_obj.numerator) if ts_obj else 4
 
-    # ── Collapse to a single flat stream of notes ─────────────────────────
-    # For multi-part scores use Part 0 (melody / top voice)
+    # ── Collect notes from ALL parts for full piano roll ─────────────────
+    # For multi-part scores, flatten each part separately and merge notes
+    # into a unified measure structure. This ensures all voices appear in
+    # the piano roll (not just the soprano/top voice).
     if score.hasPartLikeStreams():
-        parts = list(score.parts)
-        working = parts[0] if parts else score
+        all_parts = list(score.parts)
     else:
-        working = score
+        all_parts = [score]
+
+    # Use the first part (or the score) to determine measure boundaries
+    ref_part = all_parts[0] if all_parts else score
 
     # MIDI files need explicit measure creation
     if suffix in (".mid", ".midi"):
-        working = working.flatten()
-        working = working.makeMeasures(inPlace=False)
-    else:
-        # MusicXML already has measures — just flatten within each measure
-        pass
+        ref_part = ref_part.flatten().makeMeasures(inPlace=False)
 
     # ── Iterate measures ──────────────────────────────────────────────────
     measures: list[VexFlowMeasure] = []
     total_beats = Fraction(0)
 
-    measure_stream = list(working.getElementsByClass(m21.stream.Measure))
+    measure_stream = list(ref_part.getElementsByClass(m21.stream.Measure))
     if not measure_stream:
-        # Last resort: treat the whole piece as one measure
-        working = working.flatten().makeMeasures(inPlace=False)
-        measure_stream = list(working.getElementsByClass(m21.stream.Measure))
+        ref_part = ref_part.flatten().makeMeasures(inPlace=False)
+        measure_stream = list(ref_part.getElementsByClass(m21.stream.Measure))
 
-    for i, measure in enumerate(measure_stream):
+    # Pre-flatten all parts into measure lists for merging
+    part_measures: list[list] = []
+    for part in all_parts:
+        if suffix in (".mid", ".midi"):
+            p = part.flatten().makeMeasures(inPlace=False)
+        else:
+            p = part
+        pm = list(p.getElementsByClass(m21.stream.Measure))
+        if pm:
+            part_measures.append(pm)
+        else:
+            # If this part has no measures, try flatten+makeMeasures
+            p = part.flatten().makeMeasures(inPlace=False)
+            pm = list(p.getElementsByClass(m21.stream.Measure))
+            if pm:
+                part_measures.append(pm)
+
+    for i, ref_measure in enumerate(measure_stream):
         start_beat = total_beats
-        dur = Fraction(measure.duration.quarterLength).limit_denominator(64)
+        dur = Fraction(ref_measure.duration.quarterLength).limit_denominator(64)
         if dur == 0:
             dur = Fraction(beats_per_measure)
         end_beat = start_beat + dur
 
         notes: list[VexFlowNote] = []
-        for el in measure.flatten().notesAndRests:
-            el_dur = str(Fraction(el.duration.quarterLength).limit_denominator(64))
-            # absolute beat offset = measure start + element offset within measure
-            abs_offset = float(start_beat + Fraction(el.offset).limit_denominator(64))
-            el_offset = str(abs_offset)
 
-            if el.isRest:
-                notes.append(VexFlowNote(type="rest", duration=el_dur, offset=el_offset))
-            elif hasattr(el, "pitches") and len(el.pitches) > 1:
-                # Chord — store all pitches + MIDI numbers for piano roll
-                notes.append(VexFlowNote(
-                    type="note",
-                    pitches=[str(p) for p in el.pitches],
-                    duration=el_dur,
-                    offset=el_offset,
-                ))
-            else:
-                notes.append(VexFlowNote(
-                    type="note",
-                    pitch=str(el.pitch),
-                    duration=el_dur,
-                    offset=el_offset,
-                ))
+        # Collect notes from ALL parts for this measure index
+        for pm in part_measures:
+            if i >= len(pm):
+                continue
+            measure = pm[i]
+
+            for el in measure.flatten().notesAndRests:
+                el_dur = str(Fraction(el.duration.quarterLength).limit_denominator(64))
+                # absolute beat offset = measure start + element offset within measure
+                abs_offset = float(start_beat + Fraction(el.offset).limit_denominator(64))
+                el_offset = str(abs_offset)
+
+                if el.isRest:
+                    # Skip rests from secondary parts to avoid clutter
+                    continue
+                elif hasattr(el, "pitches") and len(el.pitches) > 1:
+                    # Chord — store all pitches
+                    notes.append(VexFlowNote(
+                        type="note",
+                        pitches=[str(p) for p in el.pitches],
+                        duration=el_dur,
+                        offset=el_offset,
+                    ))
+                else:
+                    notes.append(VexFlowNote(
+                        type="note",
+                        pitch=str(el.pitch),
+                        duration=el_dur,
+                        offset=el_offset,
+                    ))
 
         measures.append(VexFlowMeasure(
             index=i,

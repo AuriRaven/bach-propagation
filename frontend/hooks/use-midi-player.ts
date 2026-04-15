@@ -178,9 +178,20 @@ export function useMidiPlayer() {
   }, [setPlaybackPosition])
 
   // ── Load MIDI when signed_url changes ────────────────────────────────────
+  // Only attempt MIDI parse for .mid/.midi files. .krn and .musicxml files
+  // cannot be parsed by @tonejs/midi (they need music21 on the backend).
   useEffect(() => {
     if (!activeScore?.signed_url) return
     if (loadedUrlRef.current === activeScore.signed_url) return
+
+    // Check file format — skip non-MIDI files
+    const score = activeScore as Record<string, unknown>
+    const format = (score.file_format as string | undefined)
+      ?? (score.storage_object_path as string | undefined)?.split(".").pop()?.toLowerCase()
+    if (format && !["mid", "midi"].includes(format)) {
+      console.info(`[useMidiPlayer] Skipping MIDI load for .${format} file — audio not available`)
+      return
+    }
 
     void (async () => {
       const Tone  = await import("tone")
@@ -193,7 +204,7 @@ export function useMidiPlayer() {
         const buf = await fetch(activeScore.signed_url!).then((r) => r.arrayBuffer())
         midi = new Midi(buf)
       } catch (err) {
-        console.error("[useMidiPlayer] MIDI fetch failed:", err)
+        console.warn("[useMidiPlayer] MIDI parse failed — file may not be in MIDI format:", err)
         return
       }
 

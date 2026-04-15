@@ -19,6 +19,8 @@ export type PlaybackState = "stopped" | "playing" | "paused"
 export interface CorpusFile {
   id: string
   bwv: string | null
+  filename: string
+  file_format?: string | null
   movement_name: string | null
   collection: string
   storage_object_path: string

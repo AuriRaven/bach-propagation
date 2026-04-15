@@ -110,6 +110,7 @@ out/
 build/
 .vercel
 *.tsbuildinfo
+!vercel.json
 
 # --- Docker ---
 .docker/

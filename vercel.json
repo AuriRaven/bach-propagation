@@ -1,11 +1,12 @@
 {
   "version": 2,
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/backend/main.py" }
-  ],
-  "functions": {
-    "backend/main.py": {
-      "runtime": "vercel-python@0.0.6"
+  "builds": [
+    {
+      "src": "main.py",
+      "use": "@vercel/python"
     }
-  }
+  ],
+  "rewrites": [
+    { "source": "/(.*)", "destination": "main.py" }
+  ]
 }

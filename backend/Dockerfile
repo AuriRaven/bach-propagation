@@ -1,24 +1,32 @@
 FROM python:3.11-slim
 
+# Instalamos uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# 1. Configuración clave para UV
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UV_PROJECT_ENVIRONMENT=/app/.venv
+    # IMPORTANTE: Hugging Face necesita permisos de escritura en ciertas carpetas
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    HOME=/home/user \
+    PATH="/home/user/.local/bin:$PATH"
 
+# Creamos un usuario no-root (buena práctica en Hugging Face)
+RUN useradd -m -u 1000 user
+USER user
 WORKDIR /app
 
 # Copiar archivos de dependencias
-COPY pyproject.toml uv.lock ./
+COPY --chown=user pyproject.toml uv.lock ./
 
-# 2. Instalamos. Esto creará /app/.venv con certeza
+# Instalamos dependencias
 RUN uv sync --frozen --no-install-project --all-extras
 
-COPY . .
+# Copiamos el resto del código
+COPY --chown=user . .
 
-EXPOSE 8000
+# El puerto DEBE ser 7860 para Hugging Face
+EXPOSE 7860
 
-# Usamos la ruta absoluta del binario dentro del venv que creamos
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Comando sin --reload y apuntando al puerto correcto
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]

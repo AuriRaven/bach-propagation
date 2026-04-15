@@ -4,7 +4,7 @@ services:
       context: ./backend
     container_name: bach-backend
     ports:
-      - "8000:8000"
+      - "8000:7860"
     volumes:
       - ./backend/src:/app/src
       - ./backend/routers:/app/routers

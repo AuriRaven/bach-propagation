@@ -1,10 +1,48 @@
-# **Bach Propagation**
+# Bach Propagation
 
->Este proyecto corresponde a un Pipeline de investigación para analizar y modelar el lenguaje armónico de Bach. El sistema toma archivos MIDI o MusicXML en bruto, extrae secuencias armónicas a través de un pipeline de análisis de múltiples etapas, entrena un LSTM como modelo base sobre esas secuencias y realiza un análisis no supervisado del espacio de embeddings de acordes aprendido.
+> Pipeline de investigación y aplicación generativa para el análisis y síntesis del lenguaje armónico barroco. El sistema ingiere partituras MIDI/MusicXML, extrae secuencias armónicas mediante un análisis simbólico multicapa, entrena modelos generativos (Transformer para el corpus completo barroco; LSTM como baseline para el subcorpus de instrumento solo) y expone los resultados a través de una API REST consumida por una interfaz interactiva en Next.js.
 
 ---
 
-## Visión general del pipeline
+## Arquitectura del sistema
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          FRONTEND  (Next.js / React)                │
+│                                                                     │
+│  bach-workbench.tsx ──── LibraryView  (exploración del corpus)      │
+│         │           ──── CompositionView  (generación interactiva)  │
+│         │           ──── AnalysisView  (análisis armónico)          │
+│         │           ──── SettingsView                               │
+│         │                                                           │
+│  useMidiPlayer  │  useAiChat  │  useGeneration  │  api-client.ts    │
+└─────────────────────────┬───────────────────────────────────────────┘
+                          │ HTTP / REST  (puerto 3000 → 8000)
+┌─────────────────────────▼───────────────────────────────────────────┐
+│                         BACKEND  (FastAPI / Python 3.11+)           │
+│                                                                     │
+│  POST /api/generate   ← MusicTransformer (transformer-v1)           │
+│  GET  /api/corpus     ← Consulta y streaming del corpus curado      │
+│  POST /api/analysis   ← Pipeline de análisis armónico por partitura │
+│  POST /api/ai/chat    ← Chat musicológico asistido por LLM          │
+└─────────────────────────┬───────────────────────────────────────────┘
+                          │
+          ┌───────────────┼───────────────────┐
+          ▼               ▼                   ▼
+   MusicTransformer  BaroqueHarmonyLSTM   Corpus (Supabase)
+   (corpus barroco)  (instrumento solo)   + ETL pipeline
+```
+
+### Modelos
+
+| Modelo | Corpus | Descripción |
+|---|---|---|
+| `MusicTransformer` | Corpus barroco completo (multi-compositor) | Transformer generativo condicionado por función armónica; genera secuencias de acordes en estilo barroco con gramática restringida. |
+| `BaroqueHarmonyLSTM` | Subcorpus de instrumento solo (Bach) | LSTM baseline de 2 capas para predicción del siguiente acorde; sirve como línea de referencia cuantitativa. |
+
+---
+
+## Pipeline de análisis armónico
 
 ```
 MIDI / MusicXML
@@ -13,34 +51,31 @@ MIDI / MusicXML
   ScoreLoader          ← parseo a representación interna Score
       │
       ▼
-  Quantizer            ← ajuste de onsets/duraciones a rejilla rítmica
+  Quantizer            ← ajuste de onsets/duraciones a rejilla rítmica (1/16)
       │
       ▼
-  Windower             ← segmentación en ventanas de análisis
+  Windower             ← segmentación por compás, tiempo o ventana deslizante
       │
       ▼
   KeyEstimator         ← detección de tonalidad (Krumhansl-Schmuckler)
       │
       ▼
-  ChordClassifier      ← detección de acordes por plantillas
+  ChordClassifier      ← detección de acordes por plantillas (media geométrica)
       │
       ▼
-  RomanNumeralAnalyzer ← Acorde + Tonalidad → cifrado romano
+  RomanNumeralAnalyzer ← (Acorde, Tonalidad) → cifrado romano + dominantes secundarias
       │
       ▼
-  FunctionLabeler      ← función armónica T / PD / D
+  FunctionLabeler      ← etiquetado T / PD / D con sobreescrituras contextuales
       │
       ▼
   ProlongationAnalyzer ← árbol de reducción schenkeriana en 3 niveles
       │
       ▼
-  SequenceExtractor    ← codificación de eventos a secuencias de tokens
+  SequenceExtractor    ← codificación a tokens (vocabulario de 90)
       │
       ▼
-  BaroqueHarmonyLSTM   ← modelo de predicción del siguiente acorde
-      │
-      ▼
-  EmbeddingAnalysis    ← clustering no supervisado del espacio de embeddings
+  MusicTransformer / BaroqueHarmonyLSTM
 ```
 
 ---
@@ -49,185 +84,264 @@ MIDI / MusicXML
 
 ```
 bach-propagation/
-├── src/
-│   ├── core/
-│   │   ├── data_structures.py       # Todos los tipos del dominio musical (tiempo con Fraction)
-│   │   └── score_loader.py          # MIDI/MusicXML → Score
-│   ├── temporal/
-│   │   ├── meter_analyzer.py        # Rejillas de peso métrico jerárquico
-│   │   ├── quantizer.py             # Ajuste de onsets y duraciones
-│   │   └── windower.py              # Segmentación (compás / tiempo / deslizante)
-│   ├── harmonic/
-│   │   ├── key_estimator.py         # Estimación de tonalidad global y local
-│   │   ├── chord_classifier.py      # Detección de acordes por plantillas
-│   │   ├── roman_numeral_analyzer.py
-│   │   └── function_labeler.py      # Etiquetado T/PD/D con sobreescrituras contextuales
-│   ├── schenkerian/
-│   │   └── prolongation.py          # ProlongationAnalyzer (árbol de reducción en 3 niveles)
-│   ├── data/
-│   │   ├── sequence_extractor.py    # Pipeline → dicts de eventos codificados
-│   │   ├── encoder.py               # Vocabulario de 90 tokens (acorde/función/tonalidad)
-│   │   └── dataset.py               # HarmonyDataset, partición 80/20 train-val
-│   ├── models/
-│   │   ├── baseline_lstm.py         # BaroqueHarmonyLSTM (embed=64, hidden=128, 2 capas)
-│   │   └── train.py                 # Loop de entrenamiento con early stopping
-│   ├── evaluation/
-│   │   └── metrics.py               # Exactitud, perplejidad, validez de transiciones, ARI
-│   ├── analysis/
-│   │   └── embedding_analysis.py    # Análisis no supervisado del espacio de embeddings
-│   └── utils/
-│       └── music21_helpers.py       # Wrappers ligeros de music21
-├── scripts/
-│   ├── extract_all.py               # Extracción en lote del corpus → sequences.json
-│   ├── train_baseline.py            # Entrenamiento del LSTM → model_best.pt
-│   ├── evaluate_baseline.py         # Tabla de métricas: LSTM vs. Modelo aleatorio
-│   ├── analyze_embeddings.py        # Clustering de embeddings + figuras
-│   └── validate_chorales.py         # Validación del pipeline en 10 corales BWV
-├── tests/                           # Suite pytest (un subpaquete por módulo de src)
-├── data/
-│   └── samples/01_bach/             # Archivos MIDI locales (opcionales — ver más abajo)
-├── results/                         # Salidas de los scripts (en .gitignore)
-├── README.md                        # Documentación técnica e instrucciones para usar el repositorio
-├── pyproject.toml
-└── uv.lock
+├── backend/                          # Servicio Python (FastAPI)
+│   ├── main.py                       # Punto de entrada; registra routers y CORS
+│   ├── pyproject.toml                # Dependencias y configuración (uv)
+│   ├── routers/
+│   │   ├── generation.py             # POST /api/generate — generación con Transformer
+│   │   ├── analysis.py               # POST /api/analysis — análisis armónico
+│   │   ├── corpus.py                 # GET  /api/corpus  — consulta del corpus curado
+│   │   └── ai_chat.py                # POST /api/ai/chat — chat musicológico (LLM)
+│   ├── src/
+│   │   ├── core/                     # Tipos musicales y cargador de partituras
+│   │   ├── temporal/                 # Cuantización métrica y ventanas de análisis
+│   │   ├── harmonic/                 # Estimación de tonalidad, clasificación de acordes,
+│   │   │                             #   numerales romanos, función armónica
+│   │   ├── schenkerian/              # Árbol de prolongación schenkeriana (3 niveles)
+│   │   ├── data/                     # Extractor de secuencias, encoder (90 tokens), dataset
+│   │   ├── models/                   # MusicTransformer, BaroqueHarmonyLSTM, generador
+│   │   ├── grammar/                  # Reglas y validador de gramática barroca
+│   │   ├── evaluation/               # Exactitud, perplejidad, validez de transiciones
+│   │   ├── corpus/                   # Matriz de transiciones
+│   │   ├── analysis/                 # Análisis no supervisado del espacio de embeddings
+│   │   └── utils/                    # Wrappers de music21, utilidades de red
+│   ├── scripts/
+│   │   ├── baroque_corpus_etl/       # Pipeline ETL completo (Bronze → Silver → Gold)
+│   │   │   ├── extract/              # Descarga de KernScores, Mutopia, Kunst der Fuge, jsbach.net
+│   │   │   ├── transform/            # Auditoría, decodificación de nombres, plan de renombrado
+│   │   │   └── load/                 # Carga al corpus, metadatos, embeddings, Supabase
+│   │   ├── train_transformer.py      # Entrenamiento del MusicTransformer
+│   │   ├── train_baseline.py         # Entrenamiento del LSTM baseline
+│   │   ├── evaluate_transformer.py   # Métricas: Transformer vs. baseline
+│   │   ├── evaluate_baseline.py      # Métricas: LSTM vs. modelo aleatorio
+│   │   ├── extract_all.py            # Extracción del corpus → sequences.json
+│   │   ├── batch_harmonic_analysis.py
+│   │   ├── analyze_embeddings.py     # Clustering + figuras del espacio de embeddings
+│   │   └── validate_chorales.py      # Smoke-test del pipeline en 10 corales BWV
+│   ├── checkpoints/
+│   │   └── transformer-v1/           # Checkpoint activo del Transformer
+│   ├── reports/                      # Auditorías del corpus (bronze_audit.csv, etc.)
+│   └── tests/                        # Suite pytest (442+ tests)
+│
+├── frontend/                         # Aplicación Next.js / React
+│   ├── app/                          # Rutas y layout (App Router)
+│   ├── components/
+│   │   ├── bach-workbench.tsx        # Componente integrador principal
+│   │   ├── views/
+│   │   │   ├── composition-view.tsx  # Generación interactiva con controles de modelo
+│   │   │   ├── analysis-view.tsx     # Visualización del análisis armónico
+│   │   │   ├── library-view.tsx      # Exploración del corpus curado
+│   │   │   └── settings-view.tsx
+│   │   └── ui/                       # Sistema de diseño (shadcn/ui)
+│   ├── hooks/
+│   │   ├── use-midi-player.ts        # Reproducción MIDI en el navegador
+│   │   ├── use-ai-chat.ts            # Chat con el asistente musicológico
+│   │   ├── use-generation.ts         # Llamada a POST /api/generate
+│   │   └── use-load-into-workbench.ts
+│   └── lib/
+│       ├── api-client.ts             # Cliente tipado para todos los endpoints
+│       └── app-state.tsx             # Estado global de la aplicación
+│
+└── docker-compose.yml                # Levanta backend + frontend en un comando
 ```
 
 ---
 
-## Datos
-Puedes usar el el corpus de bach para Cello, Violín y Flauta Solos disponible dando click [aquí](https://drive.google.com/drive/folders/1xVFWoCIXrHlDUlijDBDBJGywb6344sfT?usp=sharing). Acomódalo dentro de una ubicación llamada `data/samples`a nivel raíz. 
+## Levantar el entorno
 
-## Instalación
+### Opción A — Docker (recomendado)
 
-Requiere Python 3.11+ y [uv](https://github.com/astral-sh/uv).
+Requiere Docker Desktop y un archivo `.env` en la raíz con las variables necesarias:
 
 ```bash
+# .env (en la raíz del repositorio)
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...
+OPENAI_API_KEY=...
+```
+
+```bash
+docker compose up --build
+```
+
+| Servicio | URL local |
+|---|---|
+| Backend (FastAPI + docs) | http://localhost:8000/docs |
+| Frontend (Next.js) | http://localhost:3000 |
+
+Para detener los servicios:
+
+```bash
+docker compose down
+```
+
+---
+
+### Opción B — Entorno local con `uv`
+
+Requiere Python 3.11+ y [`uv`](https://github.com/astral-sh/uv).
+
+```bash
+# 1. Clonar el repositorio
 git clone <repo-url>
 cd bach-propagation
-uv sync
-```
 
-Con dependencias de desarrollo (para correr los tests):
+# 2. Instalar dependencias del backend
+cd backend
+uv sync              # dependencias de producción
+uv sync --extra dev  # + pytest y herramientas de desarrollo
 
-```bash
-uv sync --extra dev
+# 3. Iniciar el servidor FastAPI
+uv run uvicorn main:app --reload --port 8000
+
+# 4. En otra terminal — instalar y arrancar el frontend
+cd ../frontend
+pnpm install
+pnpm dev             # → http://localhost:3000
 ```
 
 ---
 
-## Correr los tests
+## Flujos de ETL y entrenamiento
+
+### ETL del corpus barroco (Bronze → Silver → Gold)
+
+Los scripts en `backend/scripts/baroque_corpus_etl/` implementan un pipeline de medallón:
 
 ```bash
-# Suite completa
-uv run pytest
+# Bronze — descarga de fuentes primarias
+cd backend
+uv run python scripts/baroque_corpus_etl/extract/download_kernscores_bach.py
+uv run python scripts/baroque_corpus_etl/extract/download_mutopia_baroque.py
+uv run python scripts/baroque_corpus_etl/extract/download_kunstderfuge_p1.py
+uv run python scripts/baroque_corpus_etl/extract/download_kunstderfuge_p2.py
+uv run python scripts/baroque_corpus_etl/extract/download_jsbach_net.py
 
-# Módulo individual
-uv run pytest tests/core/
-uv run pytest tests/harmonic/
-uv run pytest tests/models/
-uv run pytest tests/analysis/
+# Silver — auditoría, normalización de nombres y enriquecimiento de metadatos
+uv run python scripts/baroque_corpus_etl/transform/audit_bronze.py
+uv run python scripts/baroque_corpus_etl/transform/rename_plan.py
+uv run python scripts/baroque_corpus_etl/transform/execute_rename.py
+uv run python scripts/baroque_corpus_etl/transform/enrich_audit.py
 
-# Con cobertura
-uv run pytest --cov=src
+# Gold — carga al corpus curado y subida a Supabase
+uv run python scripts/baroque_corpus_etl/load/load_corpus.py
+uv run python scripts/baroque_corpus_etl/load/extract_metadata.py
+uv run python scripts/baroque_corpus_etl/load/generate_embeddings.py
+uv run python scripts/baroque_corpus_etl/load/upload_to_storage.py
 ```
 
-Los tests que dependen de archivos MIDI locales se saltan automáticamente si esos archivos no están presentes.
+Los reportes de auditoría se generan automáticamente en `backend/reports/`.
 
 ---
 
-## Correr los scripts
-
-Todos los scripts se ejecutan desde la raíz del repositorio con `uv run`.
-
-### 1 — Extraer secuencias armónicas de un corpus MIDI
+### Entrenamiento del MusicTransformer (corpus barroco completo)
 
 ```bash
+cd backend
+
+# 1. Extraer secuencias armónicas del corpus
+uv run python scripts/extract_all.py \
+    --midi-dir data/encoded \
+    --output data/encoded/sequences.json \
+    --augment          # transpone a los 12 tonos
+
+# 2. Construir el vocabulario armónico
+uv run python scripts/build_harmonic_vocab.py \
+    --sequences data/encoded/sequences.json \
+    --output data/encoded/vocab.json
+
+# 3. Entrenar el Transformer
+uv run python scripts/train_transformer.py \
+    --sequences data/encoded/sequences.json \
+    --vocab data/encoded/vocab.json \
+    --output checkpoints/transformer-v1
+
+# 4. Evaluar
+uv run python scripts/evaluate_transformer.py \
+    --checkpoint checkpoints/transformer-v1/best.pt \
+    --sequences data/encoded/sequences.json
+```
+
+---
+
+### Entrenamiento del LSTM baseline (instrumento solo)
+
+```bash
+cd backend
+
+# Extraer secuencias del subcorpus de instrumento solo
 uv run python scripts/extract_all.py \
     --midi-dir data/samples/01_bach \
     --output data/sequences.json
 
-# Con aumentación de altura (transpone cada pieza a los 12 tonos)
-uv run python scripts/extract_all.py \
-    --midi-dir data/samples/01_bach \
-    --output data/sequences.json \
-    --augment
-```
-
-Produce `data/sequences.json` — una lista de secuencias de dicts de eventos usada para el entrenamiento.
-
-### 2 — Entrenar el LSTM como modelo baseline
-
-```bash
+# Entrenar
 uv run python scripts/train_baseline.py \
     --sequences data/sequences.json \
     --epochs 30 \
     --checkpoint model_best.pt
-```
 
-Guarda el checkpoint con mejor pérdida de validación en `model_best.pt`.
-
-### 3 — Evaluar el modelo entrenado
-
-```bash
+# Evaluar (LSTM vs. modelo aleatorio)
 uv run python scripts/evaluate_baseline.py \
     --checkpoint model_best.pt \
     --sequences data/sequences.json
-```
 
-Imprime una tabla comparativa (LSTM vs. Modelo Aleatorio) con exactitud de acorde, exactitud de función armónica, validez de transiciones y perplejidad.
-
-### 4 — Analizar el espacio de embeddings de acordes
-
-```bash
+# Analizar espacio de embeddings
 uv run python scripts/analyze_embeddings.py \
     --checkpoint model_best.pt \
     --sequences data/sequences.json \
     --output-dir results/embedding_analysis
 ```
 
-Salidas:
+---
 
-| Archivo | Descripción |
-|---|---|
-| `purity_results.json` | Pureza, ARI, varianza PCA, correlación con círculo de quintas |
-| `embeddings_2d.csv` | Coordenadas 2D (PCA) para los 60 tokens de acorde |
-| `figures/function_ground_truth.png` | Scatter coloreado por función armónica |
-| `figures/clusters_k3/5/7.png` | Scatter coloreado por cluster k-means |
-| `figures/combined_analysis.png` | Figura 2×2 para la reporte completo (funciones + clusters k=3/5 + barras de pureza) |
-
-### 5 — Validar el pipeline en corales BWV
+## Tests
 
 ```bash
-uv run python scripts/validate_chorales.py
+cd backend
+
+uv run pytest                    # suite completa
+uv run pytest tests/core/        # módulo específico
+uv run pytest tests/harmonic/
+uv run pytest tests/models/
+uv run pytest --cov=src          # con cobertura
 ```
 
-Ejecuta el pipeline completo de análisis sobre 10 corales del corpus integrado de music21 e imprime estadísticas de tonalidad, acorde y función por coral.
+Los tests que dependen de archivos MIDI locales se saltan automáticamente si esos archivos no están presentes.
 
 ---
 
-## Vocabulario de tokens
+## Datos
 
-El `Encoder` mapea eventos a un vocabulario entero de 90 tokens:
-
-| Rango | Tokens | Descripción |
+| Fuente | Acceso | Uso |
 |---|---|---|
-| 0 | 1 | PAD |
-| 1 | 1 | START |
-| 2 | 1 | END |
-| 3–62 | 60 | Acorde (12 raíces × 5 calidades: mayor, menor, dis., aum., dom7) |
-| 63–65 | 3 | Función armónica (Tónica, Subdominante, Dominante) |
-| 66–89 | 24 | Tonalidad (12 tónicos × 2 modos) |
-
-Fórmula del token de acorde: `3 + raíz × 5 + índice_calidad`.
-
-Las calidades no canónicas se colapsan antes de codificar: `major7 → major`, `minor7 → minor`, `dim7/half-dim7 → diminished`.
+| Corpus music21 integrado | Automático (sin descarga) | `validate_chorales.py`, tests de integración |
+| Subcorpus MIDI instrumento solo | [Google Drive](https://drive.google.com/drive/folders/1xVFWoCIXrHlDUlijDBDBJGywb6344sfT?usp=sharing) → `backend/data/samples/` | Entrenamiento del LSTM baseline |
+| Corpus barroco ETL | Scripts `baroque_corpus_etl/extract/` | Entrenamiento del MusicTransformer |
 
 ---
 
-## Decisiones de diseño clave
+## Variables de entorno
 
-- **`fractions.Fraction` para todos los valores temporales** — sin errores de redondeo flotante en aritmética de onsets y duraciones.
-- **`separate_voices=False` para MIDI solista** — MuseScore exporta incluso piezas monofónicas como 3–4 tracks MIDI; se aplana la voz 0 (instrumento solo) para evitar voces fantasma. Esto debido a que piezas musicales (en formato MIDI o XML) a una sola voz pueden estar estructuradas a varias voces 
-- **Puntuación de acordes con media geométrica** — `raw / sqrt(total × n_notas)` equilibra cobertura y completitud; los acordes de séptima ganan solo cuando las 4 notas están presentes.
-- **Detección de dominantes secundarias** — un acorde se marca como V/x únicamente si `(raíz + 5) % 12` coincide con una tónica diatónica y la calidad del acorde difiere de la calidad diatónica esperada para ese grado.
-- **Etiquetas de función por voto mayoritario** — `build_chord_function_map` del encoder asigna a cada token de acorde su función armónica más frecuente en el corpus de entrenamiento; usada como verdad de referencia en la evaluación no supervisada.
+| Variable | Descripción |
+|---|---|
+| `SUPABASE_URL` | URL del proyecto Supabase (almacenamiento del corpus Gold) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Clave de servicio con permisos de escritura |
+| `OPENAI_API_KEY` | Requerida para el router `/api/ai/chat` |
+| `FRONTEND_URL` | URL del frontend en producción (CORS); por defecto `http://localhost:3000` |
+
+---
+
+## Dependencias principales
+
+| Paquete | Versión mínima | Uso |
+|---|---|---|
+| `fastapi` | 0.109 | API REST del backend |
+| `music21` | 9.1 | Parseo y análisis de partituras |
+| `torch` | 2.10 | Transformer y LSTM |
+| `numpy` | 2.4.2 | Operaciones numéricas |
+| `scikit-learn` | 1.5 | Clustering y métricas de embeddings |
+| `scipy` | 1.14 | Correlación tonal (Mantel test) |
+| `matplotlib` | 3.9 | Figuras de análisis |
+| `supabase` | 2.28 | Almacenamiento del corpus Gold |
+| `pandas` | 3.0 | Auditoría y reportes ETL |
+| `openai` | 2.30 | LLM para el chat musicológico |

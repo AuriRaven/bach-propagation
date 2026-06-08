@@ -1,0 +1,12 @@
+# Overrides applied automatically by Docker Compose in local development.
+# Production uses docker-compose.yml values only.
+# To run in production: docker compose -f docker-compose.yml up
+
+services:
+  backend:
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')"]
+      interval: 10s    # Check more frequently so the frontend starts sooner
+      timeout: 5s
+      retries: 5
+      start_period: 40s  # Local machines start faster than prod

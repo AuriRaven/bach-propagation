@@ -48,6 +48,10 @@ app.include_router(ai_router,         prefix="/api")
 app.include_router(analysis_router,   prefix="/api")
 app.include_router(generation_router, prefix="/api")
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
 @app.get("/")
 def read_root():
     # Útil para verificar que el despliegue fue exitoso desde el navegador
